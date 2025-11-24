@@ -1,0 +1,30 @@
+[Unit]
+Description=Nanoncore Edge Agent
+Documentation=https://docs.nanoncore.com
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nano-agent run
+Restart=always
+RestartSec=5
+User=root
+Group=root
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/nano-agent /var/log/nano-agent
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Environment
+Environment=NANO_AGENT_CONFIG_DIR=/etc/nano-agent
+
+[Install]
+WantedBy=multi-user.target
