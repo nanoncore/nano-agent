@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -51,13 +53,26 @@ var enrollCmd = &cobra.Command{
 	Short: "Enroll this node with the Nanoncore control plane",
 	Long: `Enroll registers this edge node with the Nanoncore control plane.
 
+Interactive mode (after 'nano-agent login'):
+  - Automatically uses your saved API key
+  - Lists available networks for selection
+  - Prompts for node ID if not provided
+
+Token mode (legacy):
+  - Requires --api, --token, and --node-id flags
+
 The enrollment process:
-1. Validates the enrollment token with the API
+1. Validates credentials with the API
 2. Downloads mTLS certificates for secure communication
 3. Saves configuration to /etc/nano-agent/config.json
 4. Marks the node as enrolled
 
-Example:
+Examples:
+  # Interactive mode (recommended)
+  nano-agent login
+  sudo nano-agent enroll --node-id pop-paris-01
+
+  # Token mode
   sudo nano-agent enroll \
     --api https://api.nanoncore.com \
     --token YOUR_ENROLLMENT_TOKEN \
@@ -101,6 +116,36 @@ Example:
 	RunE: runDaemon,
 }
 
+var loginCmd = &cobra.Command{
+	Use:   "login",
+	Short: "Authenticate with Nanoncore using an API key",
+	Long: `Login authenticates you with the Nanoncore control plane using an API key.
+
+After logging in, you can use 'nano-agent enroll' interactively to select
+your organization and network.
+
+Get your API key from the Nanoncore dashboard at Settings → API Keys.
+
+Example:
+  nano-agent login --api https://api.nanoncore.com
+  nano-agent login --api-key YOUR_API_KEY`,
+	RunE: runLogin,
+}
+
+var logoutCmd = &cobra.Command{
+	Use:   "logout",
+	Short: "Remove stored credentials",
+	Long:  `Logout removes your stored API key and credentials from this machine.`,
+	RunE:  runLogout,
+}
+
+var whoamiCmd = &cobra.Command{
+	Use:   "whoami",
+	Short: "Show current logged-in user",
+	Long:  `Display information about the currently logged-in user.`,
+	RunE:  runWhoami,
+}
+
 // Enroll flags
 var (
 	enrollAPIURL string
@@ -111,9 +156,18 @@ var (
 
 // Run flags
 var (
-	heartbeatInterval time.Duration
+	heartbeatInterval  time.Duration
 	configSyncInterval time.Duration
 )
+
+// Login flags
+var (
+	loginAPIURL string
+	loginAPIKey string
+)
+
+// Default API URL
+const defaultAPIURL = "https://api.nanoncore.com"
 
 func init() {
 	// Global flags
@@ -121,13 +175,10 @@ func init() {
 		"Configuration directory")
 
 	// Enroll flags
-	enrollCmd.Flags().StringVar(&enrollAPIURL, "api", "", "Nanoncore API URL (required)")
-	enrollCmd.Flags().StringVar(&enrollToken, "token", "", "Enrollment token (required)")
-	enrollCmd.Flags().StringVar(&enrollNodeID, "node-id", "", "Unique node identifier (required)")
+	enrollCmd.Flags().StringVar(&enrollAPIURL, "api", "", "Nanoncore API URL (uses saved credentials if not set)")
+	enrollCmd.Flags().StringVar(&enrollToken, "token", "", "Enrollment token (uses API key auth if logged in)")
+	enrollCmd.Flags().StringVar(&enrollNodeID, "node-id", "", "Unique node identifier (prompted if not set)")
 	enrollCmd.Flags().StringVar(&enrollLabels, "labels", "", "Node labels (key=value,key2=value2)")
-	_ = enrollCmd.MarkFlagRequired("api")
-	_ = enrollCmd.MarkFlagRequired("token")
-	_ = enrollCmd.MarkFlagRequired("node-id")
 
 	// Run flags
 	runCmd.Flags().DurationVar(&heartbeatInterval, "heartbeat-interval", 30*time.Second,
@@ -135,8 +186,15 @@ func init() {
 	runCmd.Flags().DurationVar(&configSyncInterval, "config-sync-interval", 5*time.Minute,
 		"Interval between configuration syncs")
 
+	// Login flags
+	loginCmd.Flags().StringVar(&loginAPIURL, "api", defaultAPIURL, "Nanoncore API URL")
+	loginCmd.Flags().StringVar(&loginAPIKey, "api-key", "", "API key (will prompt if not provided)")
+
 	// Add subcommands
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(loginCmd)
+	rootCmd.AddCommand(logoutCmd)
+	rootCmd.AddCommand(whoamiCmd)
 	rootCmd.AddCommand(enrollCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(unenrollCmd)
@@ -160,6 +218,10 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("node already enrolled. Use 'nano-agent unenroll' first to re-enroll")
 	}
 
+	// Check if we have saved credentials for interactive mode
+	creds, _ := agent.LoadCredentials(configDir)
+	useInteractiveMode := creds != nil && creds.APIKey != "" && enrollToken == ""
+
 	// Parse labels
 	labels := make(map[string]string)
 	if enrollLabels != "" {
@@ -171,89 +233,238 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	fmt.Printf("API URL:  %s\n", enrollAPIURL)
-	fmt.Printf("Node ID:  %s\n", enrollNodeID)
-	if len(labels) > 0 {
-		fmt.Printf("Labels:   %v\n", labels)
-	}
-	fmt.Println()
+	var (
+		apiURL         string
+		client         *agent.Client
+		selectedOrg    *agent.Organization
+		selectedNet    *agent.Network
+		nodeID         string
+	)
 
-	// Create client and check API health
-	fmt.Printf("Checking API connectivity... ")
-	client := agent.NewClient(enrollAPIURL, enrollToken)
-	if err := client.CheckAPIHealth(); err != nil {
-		fmt.Printf("FAILED\n")
-		return fmt.Errorf("cannot reach API: %w", err)
-	}
-	fmt.Printf("OK\n")
+	if useInteractiveMode {
+		// Interactive mode using saved API key
+		fmt.Printf("Using saved credentials for %s\n\n", creds.UserEmail)
 
-	// Send enrollment request
-	fmt.Printf("Enrolling node... ")
-	enrollReq := &agent.EnrollRequest{
-		NodeID: enrollNodeID,
-		Token:  enrollToken,
-		Labels: labels,
-	}
-
-	resp, err := client.Enroll(enrollReq)
-	if err != nil {
-		fmt.Printf("FAILED\n")
-		return fmt.Errorf("enrollment failed: %w", err)
-	}
-
-	if !resp.Success {
-		fmt.Printf("FAILED\n")
-		return fmt.Errorf("enrollment rejected: %s", resp.Message)
-	}
-	fmt.Printf("OK\n")
-
-	// Save certificates if provided
-	if resp.Certificate != "" && resp.PrivateKey != "" {
-		fmt.Printf("Saving certificates... ")
-		certFile := configDir + "/client.crt"
-		keyFile := configDir + "/client.key"
-		caFile := configDir + "/ca.crt"
-
-		if err := os.MkdirAll(configDir, 0750); err != nil {
-			fmt.Printf("FAILED\n")
-			return fmt.Errorf("failed to create config directory: %w", err)
+		apiURL = creds.DefaultAPIURL
+		if enrollAPIURL != "" {
+			apiURL = enrollAPIURL
 		}
 
-		if err := os.WriteFile(certFile, []byte(resp.Certificate), 0600); err != nil {
-			fmt.Printf("FAILED\n")
-			return fmt.Errorf("failed to write certificate: %w", err)
-		}
+		client = agent.NewClientWithAPIKey(apiURL, creds.APIKey)
 
-		if err := os.WriteFile(keyFile, []byte(resp.PrivateKey), 0600); err != nil {
+		// Check API connectivity
+		fmt.Printf("Checking API connectivity... ")
+		if err := client.CheckAPIHealth(); err != nil {
 			fmt.Printf("FAILED\n")
-			return fmt.Errorf("failed to write private key: %w", err)
+			return fmt.Errorf("cannot reach API: %w", err)
 		}
+		fmt.Printf("OK\n")
 
-		if resp.CACert != "" {
-			if err := os.WriteFile(caFile, []byte(resp.CACert), 0600); err != nil {
-				fmt.Printf("FAILED\n")
-				return fmt.Errorf("failed to write CA certificate: %w", err)
+		// Fetch organizations
+		fmt.Printf("Fetching organizations... ")
+		orgs, err := client.ListOrganizations()
+		if err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("failed to fetch organizations: %w", err)
+		}
+		if len(orgs) == 0 {
+			fmt.Printf("NONE\n")
+			return fmt.Errorf("no organizations found. Create one at %s", apiURL)
+		}
+		fmt.Printf("OK (%d found)\n", len(orgs))
+
+		// Select organization (auto-select if only one)
+		if len(orgs) == 1 {
+			selectedOrg = &orgs[0]
+			fmt.Printf("Organization: %s\n", selectedOrg.Name)
+		} else {
+			orgOptions := make([]string, len(orgs))
+			for i, org := range orgs {
+				orgOptions[i] = fmt.Sprintf("%s (%s)", org.Name, org.Slug)
 			}
+			choice, err := promptSelection("Select organization:", orgOptions)
+			if err != nil {
+				return fmt.Errorf("organization selection failed: %w", err)
+			}
+			selectedOrg = &orgs[choice]
+		}
+
+		// Fetch networks
+		fmt.Printf("Fetching networks... ")
+		networks, err := client.ListNetworks(selectedOrg.ID)
+		if err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("failed to fetch networks: %w", err)
+		}
+		if len(networks) == 0 {
+			fmt.Printf("NONE\n")
+			return fmt.Errorf("no networks found in %s. Create one in the dashboard", selectedOrg.Name)
+		}
+		fmt.Printf("OK (%d found)\n", len(networks))
+
+		// Select network (auto-select if only one)
+		if len(networks) == 1 {
+			selectedNet = &networks[0]
+			fmt.Printf("Network: %s", selectedNet.Name)
+			if selectedNet.City != "" {
+				fmt.Printf(" (%s)", selectedNet.City)
+			}
+			fmt.Printf("\n")
+		} else {
+			netOptions := make([]string, len(networks))
+			for i, net := range networks {
+				opt := net.Name
+				if net.City != "" {
+					opt += fmt.Sprintf(" (%s)", net.City)
+				}
+				if net.IsDefault {
+					opt += " [default]"
+				}
+				netOptions[i] = opt
+			}
+			choice, err := promptSelection("Select network:", netOptions)
+			if err != nil {
+				return fmt.Errorf("network selection failed: %w", err)
+			}
+			selectedNet = &networks[choice]
+		}
+
+		// Get node ID
+		nodeID = enrollNodeID
+		if nodeID == "" {
+			hostname, _ := os.Hostname()
+			var err error
+			nodeID, err = promptString("Node ID", hostname)
+			if err != nil {
+				return fmt.Errorf("failed to get node ID: %w", err)
+			}
+		}
+
+		fmt.Printf("\nEnrollment Summary:\n")
+		fmt.Printf("  Organization: %s\n", selectedOrg.Name)
+		fmt.Printf("  Network:      %s (namespace: %s)\n", selectedNet.Name, selectedNet.Slug)
+		fmt.Printf("  Node ID:      %s\n", nodeID)
+		if len(labels) > 0 {
+			fmt.Printf("  Labels:       %v\n", labels)
+		}
+		fmt.Println()
+
+		// Send enrollment request (V2 with org/network)
+		fmt.Printf("Enrolling node... ")
+		enrollReq := &agent.EnrollRequestV2{
+			NodeID:         nodeID,
+			Labels:         labels,
+			OrganizationID: selectedOrg.ID,
+			NetworkID:      selectedNet.ID,
+			NetworkSlug:    selectedNet.Slug,
+		}
+
+		resp, err := client.EnrollV2(enrollReq)
+		if err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("enrollment failed: %w", err)
+		}
+
+		if !resp.Success {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("enrollment rejected: %s", resp.Message)
+		}
+		fmt.Printf("OK\n")
+
+		// Save certificates if provided
+		if err := saveCertificates(resp); err != nil {
+			return err
+		}
+
+		// Save configuration with org/network info
+		fmt.Printf("Saving configuration... ")
+		cfg := &agent.Config{
+			APIURL:           apiURL,
+			NodeID:           nodeID,
+			Labels:           labels,
+			CertFile:         configDir + "/client.crt",
+			KeyFile:          configDir + "/client.key",
+			CAFile:           configDir + "/ca.crt",
+			OrganizationID:   selectedOrg.ID,
+			OrganizationName: selectedOrg.Name,
+			NetworkID:        selectedNet.ID,
+			NetworkName:      selectedNet.Name,
+			NetworkSlug:      selectedNet.Slug,
+		}
+
+		if err := agent.SaveConfig(configDir, cfg); err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("failed to save config: %w", err)
+		}
+		fmt.Printf("OK\n")
+
+	} else {
+		// Legacy token mode
+		if enrollAPIURL == "" || enrollToken == "" || enrollNodeID == "" {
+			return fmt.Errorf("token mode requires --api, --token, and --node-id flags.\nAlternatively, run 'nano-agent login' first for interactive mode")
+		}
+
+		apiURL = enrollAPIURL
+		nodeID = enrollNodeID
+
+		fmt.Printf("API URL:  %s\n", apiURL)
+		fmt.Printf("Node ID:  %s\n", nodeID)
+		if len(labels) > 0 {
+			fmt.Printf("Labels:   %v\n", labels)
+		}
+		fmt.Println()
+
+		// Create client and check API health
+		fmt.Printf("Checking API connectivity... ")
+		client = agent.NewClient(apiURL, enrollToken)
+		if err := client.CheckAPIHealth(); err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("cannot reach API: %w", err)
+		}
+		fmt.Printf("OK\n")
+
+		// Send enrollment request
+		fmt.Printf("Enrolling node... ")
+		enrollReq := &agent.EnrollRequest{
+			NodeID: nodeID,
+			Token:  enrollToken,
+			Labels: labels,
+		}
+
+		resp, err := client.Enroll(enrollReq)
+		if err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("enrollment failed: %w", err)
+		}
+
+		if !resp.Success {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("enrollment rejected: %s", resp.Message)
+		}
+		fmt.Printf("OK\n")
+
+		// Save certificates if provided
+		if err := saveCertificates(resp); err != nil {
+			return err
+		}
+
+		// Save configuration
+		fmt.Printf("Saving configuration... ")
+		cfg := &agent.Config{
+			APIURL:   apiURL,
+			NodeID:   nodeID,
+			Labels:   labels,
+			CertFile: configDir + "/client.crt",
+			KeyFile:  configDir + "/client.key",
+			CAFile:   configDir + "/ca.crt",
+		}
+
+		if err := agent.SaveConfig(configDir, cfg); err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("failed to save config: %w", err)
 		}
 		fmt.Printf("OK\n")
 	}
-
-	// Save configuration
-	fmt.Printf("Saving configuration... ")
-	cfg := &agent.Config{
-		APIURL:   enrollAPIURL,
-		NodeID:   enrollNodeID,
-		Labels:   labels,
-		CertFile: configDir + "/client.crt",
-		KeyFile:  configDir + "/client.key",
-		CAFile:   configDir + "/ca.crt",
-	}
-
-	if err := agent.SaveConfig(configDir, cfg); err != nil {
-		fmt.Printf("FAILED\n")
-		return fmt.Errorf("failed to save config: %w", err)
-	}
-	fmt.Printf("OK\n")
 
 	// Save state
 	fmt.Printf("Updating state... ")
@@ -269,11 +480,50 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("OK\n")
 
-	fmt.Printf("\n✓ Node '%s' successfully enrolled!\n", enrollNodeID)
+	fmt.Printf("\n✓ Node '%s' successfully enrolled!\n", nodeID)
+	if selectedNet != nil {
+		fmt.Printf("  Network: %s (namespace: %s)\n", selectedNet.Name, selectedNet.Slug)
+	}
 	fmt.Printf("\nNext steps:\n")
+	fmt.Printf("  - Start daemon: sudo nano-agent run\n")
 	fmt.Printf("  - Check status: sudo nano-agent status\n")
-	fmt.Printf("  - View logs: journalctl -u nano-agent\n")
 
+	return nil
+}
+
+// saveCertificates saves the enrollment certificates to disk
+func saveCertificates(resp *agent.EnrollResponse) error {
+	if resp.Certificate == "" || resp.PrivateKey == "" {
+		return nil
+	}
+
+	fmt.Printf("Saving certificates... ")
+	certFile := configDir + "/client.crt"
+	keyFile := configDir + "/client.key"
+	caFile := configDir + "/ca.crt"
+
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		fmt.Printf("FAILED\n")
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	if err := os.WriteFile(certFile, []byte(resp.Certificate), 0600); err != nil {
+		fmt.Printf("FAILED\n")
+		return fmt.Errorf("failed to write certificate: %w", err)
+	}
+
+	if err := os.WriteFile(keyFile, []byte(resp.PrivateKey), 0600); err != nil {
+		fmt.Printf("FAILED\n")
+		return fmt.Errorf("failed to write private key: %w", err)
+	}
+
+	if resp.CACert != "" {
+		if err := os.WriteFile(caFile, []byte(resp.CACert), 0600); err != nil {
+			fmt.Printf("FAILED\n")
+			return fmt.Errorf("failed to write CA certificate: %w", err)
+		}
+	}
+	fmt.Printf("OK\n")
 	return nil
 }
 
@@ -309,6 +559,12 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Enrolled At:  %s\n", state.EnrolledAt)
 		fmt.Printf("  Node ID:      %s\n", cfg.NodeID)
 		fmt.Printf("  API URL:      %s\n", cfg.APIURL)
+		if cfg.OrganizationName != "" {
+			fmt.Printf("  Organization: %s\n", cfg.OrganizationName)
+		}
+		if cfg.NetworkName != "" {
+			fmt.Printf("  Network:      %s (namespace: %s)\n", cfg.NetworkName, cfg.NetworkSlug)
+		}
 		if len(cfg.Labels) > 0 {
 			fmt.Printf("  Labels:       %v\n", cfg.Labels)
 		}
@@ -320,7 +576,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		fmt.Printf("  Enrolled:     No\n")
-		fmt.Printf("  Run 'sudo nano-agent enroll' to register this node\n")
+		fmt.Printf("  Run 'nano-agent login' then 'sudo nano-agent enroll' to register this node\n")
 	}
 	fmt.Println()
 
@@ -601,4 +857,168 @@ func syncConfig(client *agent.Client, nodeID string, state *agent.State) {
 	// - Routing updates
 	// - QoS policies
 	// etc.
+}
+
+// runLogin handles the login command
+func runLogin(cmd *cobra.Command, args []string) error {
+	fmt.Printf("Nanoncore Login\n")
+	fmt.Printf("===============\n\n")
+
+	// Check if already logged in
+	existingCreds, _ := agent.LoadCredentials(configDir)
+	if existingCreds != nil && existingCreds.APIKey != "" {
+		fmt.Printf("You are already logged in as %s (%s)\n", existingCreds.UserEmail, existingCreds.UserID)
+		fmt.Printf("Use 'nano-agent logout' first to login as a different user.\n")
+		return nil
+	}
+
+	apiKey := loginAPIKey
+	if apiKey == "" {
+		// Prompt for API key
+		fmt.Printf("Get your API key from the Nanoncore dashboard:\n")
+		fmt.Printf("  %s/settings/api-keys\n\n", strings.TrimSuffix(loginAPIURL, "/api"))
+		fmt.Printf("Enter your API key: ")
+
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			return fmt.Errorf("failed to read input: %w", err)
+		}
+		apiKey = strings.TrimSpace(input)
+	}
+
+	if apiKey == "" {
+		return fmt.Errorf("API key is required")
+	}
+
+	// Validate the API key
+	fmt.Printf("\nValidating API key... ")
+	client := agent.NewClientWithAPIKey(loginAPIURL, apiKey)
+
+	validateResp, err := client.ValidateAPIKey()
+	if err != nil {
+		fmt.Printf("FAILED\n")
+		return fmt.Errorf("failed to validate API key: %w", err)
+	}
+
+	if !validateResp.Valid {
+		fmt.Printf("INVALID\n")
+		return fmt.Errorf("invalid API key: %s", validateResp.Message)
+	}
+	fmt.Printf("OK\n")
+
+	// Save credentials
+	fmt.Printf("Saving credentials... ")
+	creds := &agent.Credentials{
+		APIKey:        apiKey,
+		UserID:        validateResp.UserID,
+		UserEmail:     validateResp.UserEmail,
+		LoggedInAt:    time.Now().UTC().Format(time.RFC3339),
+		DefaultAPIURL: loginAPIURL,
+	}
+
+	if err := agent.SaveCredentials(configDir, creds); err != nil {
+		fmt.Printf("FAILED\n")
+		return fmt.Errorf("failed to save credentials: %w", err)
+	}
+	fmt.Printf("OK\n")
+
+	fmt.Printf("\n✓ Logged in as %s\n", validateResp.UserEmail)
+	fmt.Printf("\nNext steps:\n")
+	fmt.Printf("  - Enroll this node: sudo nano-agent enroll --node-id YOUR_NODE_ID\n")
+	fmt.Printf("  - Check status:     nano-agent whoami\n")
+
+	return nil
+}
+
+// runLogout handles the logout command
+func runLogout(cmd *cobra.Command, args []string) error {
+	creds, _ := agent.LoadCredentials(configDir)
+	if creds == nil || creds.APIKey == "" {
+		fmt.Printf("Not logged in.\n")
+		return nil
+	}
+
+	if err := agent.DeleteCredentials(configDir); err != nil {
+		return fmt.Errorf("failed to remove credentials: %w", err)
+	}
+
+	fmt.Printf("✓ Logged out successfully\n")
+	return nil
+}
+
+// runWhoami handles the whoami command
+func runWhoami(cmd *cobra.Command, args []string) error {
+	creds, err := agent.LoadCredentials(configDir)
+	if err != nil {
+		return fmt.Errorf("failed to load credentials: %w", err)
+	}
+
+	if creds == nil || creds.APIKey == "" {
+		fmt.Printf("Not logged in.\n")
+		fmt.Printf("Run 'nano-agent login' to authenticate.\n")
+		return nil
+	}
+
+	fmt.Printf("Logged in as:\n")
+	fmt.Printf("  Email:     %s\n", creds.UserEmail)
+	fmt.Printf("  User ID:   %s\n", creds.UserID)
+	fmt.Printf("  API URL:   %s\n", creds.DefaultAPIURL)
+	fmt.Printf("  Since:     %s\n", creds.LoggedInAt)
+
+	// Validate the API key is still valid
+	client := agent.NewClientWithAPIKey(creds.DefaultAPIURL, creds.APIKey)
+	validateResp, err := client.ValidateAPIKey()
+	if err != nil {
+		fmt.Printf("  Status:    Unable to verify (%v)\n", err)
+	} else if !validateResp.Valid {
+		fmt.Printf("  Status:    API key expired or revoked\n")
+	} else {
+		fmt.Printf("  Status:    Active\n")
+	}
+
+	return nil
+}
+
+// promptSelection displays a list of options and returns the user's choice
+func promptSelection(prompt string, options []string) (int, error) {
+	fmt.Printf("\n%s\n", prompt)
+	for i, opt := range options {
+		fmt.Printf("  [%d] %s\n", i+1, opt)
+	}
+	fmt.Printf("\nEnter number (1-%d): ", len(options))
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return -1, fmt.Errorf("failed to read input: %w", err)
+	}
+
+	choice, err := strconv.Atoi(strings.TrimSpace(input))
+	if err != nil || choice < 1 || choice > len(options) {
+		return -1, fmt.Errorf("invalid selection")
+	}
+
+	return choice - 1, nil
+}
+
+// promptString prompts for a string input with a default value
+func promptString(prompt string, defaultValue string) (string, error) {
+	if defaultValue != "" {
+		fmt.Printf("%s [%s]: ", prompt, defaultValue)
+	} else {
+		fmt.Printf("%s: ", prompt)
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	input, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("failed to read input: %w", err)
+	}
+
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return defaultValue, nil
+	}
+	return input, nil
 }
