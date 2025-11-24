@@ -1,0 +1,114 @@
+# GitHub Actions workflow for nano-agent releases
+# Copy this to: .github/workflows/release.yml in the nano-agent repo
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist release
+
+          # Build for amd64
+          echo "Building for linux/amd64..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -o dist/nano-agent-linux-amd64 \
+            ./cmd/nano-agent
+
+          # Build for arm64
+          echo "Building for linux/arm64..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -o dist/nano-agent-linux-arm64 \
+            ./cmd/nano-agent
+
+          # Build for riscv64
+          echo "Building for linux/riscv64..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build \
+            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -o dist/nano-agent-linux-riscv64 \
+            ./cmd/nano-agent
+
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+
+      - name: Build .deb packages
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+
+          for ARCH in amd64 arm64 riscv64; do
+            echo "Creating .deb for ${ARCH}..."
+            sed "s/^version:.*/version: \"${VERSION}\"/" packaging/nfpm-${ARCH}.yaml > /tmp/nfpm-${ARCH}.yaml
+            nfpm package --config /tmp/nfpm-${ARCH}.yaml --packager deb --target release/
+          done
+
+      - name: Prepare release artifacts
+        run: |
+          # Copy binaries
+          cp dist/nano-agent-linux-* release/
+
+          # Generate checksums
+          cd release
+          sha256sum * > checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Debian/Ubuntu (amd64)
+            ```bash
+            curl -LO https://github.com/nanoncore/nano-agent/releases/download/v${{ steps.version.outputs.VERSION }}/nano-agent_${{ steps.version.outputs.VERSION }}_amd64.deb
+            sudo dpkg -i nano-agent_${{ steps.version.outputs.VERSION }}_amd64.deb
+            ```
+
+            ### Debian/Ubuntu (arm64)
+            ```bash
+            curl -LO https://github.com/nanoncore/nano-agent/releases/download/v${{ steps.version.outputs.VERSION }}/nano-agent_${{ steps.version.outputs.VERSION }}_arm64.deb
+            sudo dpkg -i nano-agent_${{ steps.version.outputs.VERSION }}_arm64.deb
+            ```
+
+            ### Binary (all architectures)
+            ```bash
+            # amd64
+            curl -LO https://github.com/nanoncore/nano-agent/releases/download/v${{ steps.version.outputs.VERSION }}/nano-agent-linux-amd64
+
+            # arm64
+            curl -LO https://github.com/nanoncore/nano-agent/releases/download/v${{ steps.version.outputs.VERSION }}/nano-agent-linux-arm64
+
+            # riscv64
+            curl -LO https://github.com/nanoncore/nano-agent/releases/download/v${{ steps.version.outputs.VERSION }}/nano-agent-linux-riscv64
+            ```
+
+            ### Verify checksums
+            ```bash
+            sha256sum -c checksums.txt
+            ```

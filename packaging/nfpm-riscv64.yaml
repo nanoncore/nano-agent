@@ -1,0 +1,49 @@
+# nfpm configuration for nano-agent package (riscv64)
+name: nano-agent
+arch: riscv64
+platform: linux
+version: "0.1.0"
+release: "1"
+section: net
+priority: optional
+maintainer: Nanoncore Team <support@nanoncore.com>
+description: |
+  Nanoncore Edge Agent for BNG data plane nodes.
+  Handles enrollment with the control plane, configuration synchronization,
+  telemetry reporting, and integration with the VPP data plane.
+vendor: Nanoncore
+homepage: https://nanoncore.com
+license: Apache-2.0
+
+contents:
+  - src: ./dist/nano-agent-linux-riscv64
+    dst: /usr/bin/nano-agent
+    file_info:
+      mode: 0755
+
+  - src: ./packaging/nano-agent.service
+    dst: /lib/systemd/system/nano-agent.service
+    file_info:
+      mode: 0644
+
+  - dst: /etc/nano-agent
+    type: dir
+    file_info:
+      mode: 0750
+
+  - dst: /var/log/nano-agent
+    type: dir
+    file_info:
+      mode: 0755
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  preremove: ./packaging/preremove.sh
+
+overrides:
+  deb:
+    depends:
+      - ca-certificates
+    recommends:
+      - vpp
+      - frr
