@@ -234,3 +234,182 @@ func (c *Client) CheckAPIHealth() error {
 
 	return nil
 }
+
+// NewClientWithAPIKey creates a client with API key authentication.
+func NewClientWithAPIKey(baseURL, apiKey string) *Client {
+	return &Client{
+		baseURL: baseURL,
+		token:   apiKey,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// ValidateAPIKeyResponse is returned from API key validation.
+type ValidateAPIKeyResponse struct {
+	Valid     bool   `json:"valid"`
+	UserID    string `json:"user_id,omitempty"`
+	UserEmail string `json:"user_email,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+// ValidateAPIKey validates an API key with the control plane.
+func (c *Client) ValidateAPIKey() (*ValidateAPIKeyResponse, error) {
+	httpReq, err := http.NewRequest("GET", c.baseURL+"/api/v1/auth/validate", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return &ValidateAPIKeyResponse{Valid: false, Message: "Invalid API key"}, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("validation failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var validateResp ValidateAPIKeyResponse
+	if err := json.Unmarshal(respBody, &validateResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &validateResp, nil
+}
+
+// ListOrganizationsResponse is returned from listing organizations.
+type ListOrganizationsResponse struct {
+	Organizations []Organization `json:"organizations"`
+}
+
+// ListOrganizations fetches the user's organizations.
+func (c *Client) ListOrganizations() ([]Organization, error) {
+	httpReq, err := http.NewRequest("GET", c.baseURL+"/api/v1/me/organizations", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list organizations failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var orgsResp ListOrganizationsResponse
+	if err := json.Unmarshal(respBody, &orgsResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return orgsResp.Organizations, nil
+}
+
+// ListNetworksResponse is returned from listing networks.
+type ListNetworksResponse struct {
+	Networks []Network `json:"networks"`
+}
+
+// ListNetworks fetches the networks in an organization.
+func (c *Client) ListNetworks(orgID string) ([]Network, error) {
+	httpReq, err := http.NewRequest("GET", c.baseURL+"/api/v1/organizations/"+orgID+"/networks", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list networks failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var networksResp ListNetworksResponse
+	if err := json.Unmarshal(respBody, &networksResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return networksResp.Networks, nil
+}
+
+// EnrollRequestV2 is sent for enrollment with organization/network context.
+type EnrollRequestV2 struct {
+	NodeID         string            `json:"node_id"`
+	Token          string            `json:"token,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	OrganizationID string            `json:"organization_id"`
+	NetworkID      string            `json:"network_id"`
+	NetworkSlug    string            `json:"network_slug"` // K8s namespace
+}
+
+// EnrollV2 registers a node with organization/network context.
+func (c *Client) EnrollV2(req *EnrollRequestV2) (*EnrollResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/nodes/enroll", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("enrollment failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var enrollResp EnrollResponse
+	if err := json.Unmarshal(respBody, &enrollResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &enrollResp, nil
+}
