@@ -113,22 +113,22 @@ func NewClientWithMTLS(baseURL, certFile, keyFile, caFile string) (*Client, erro
 	}, nil
 }
 
-// Enroll registers this node with the control plane.
+// Enroll registers this node with the control plane using an enrollment token.
+// This calls the token-based enrollment endpoint which looks up the token
+// in the database to get the associated network/organization.
 func (c *Client) Enroll(req *EnrollRequest) (*EnrollResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/nodes/enroll", bytes.NewReader(body))
+	// Use the token-based enrollment endpoint
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/nodes/enroll-token", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.token)
-	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
