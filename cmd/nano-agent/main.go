@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nanoncore/nanoncore/pkg/agent"
+	"github.com/nanoncore/nano-agent/pkg/agent"
 	"github.com/spf13/cobra"
 )
 
