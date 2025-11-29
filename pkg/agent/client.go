@@ -413,3 +413,92 @@ func (c *Client) EnrollV2(req *EnrollRequestV2) (*EnrollResponse, error) {
 
 	return &enrollResp, nil
 }
+
+// EventSeverity represents the severity level of an event.
+type EventSeverity string
+
+const (
+	SeverityCritical EventSeverity = "critical"
+	SeverityWarning  EventSeverity = "warning"
+	SeverityInfo     EventSeverity = "info"
+)
+
+// EmitEventRequest is sent to create a network event.
+type EmitEventRequest struct {
+	NodeID    string                 `json:"nodeId"`
+	EventType string                 `json:"eventType"`
+	Severity  EventSeverity          `json:"severity"`
+	Content   string                 `json:"content"`
+	EntityID  string                 `json:"entityId,omitempty"`
+	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// EmitEventResponse is returned after creating an event.
+type EmitEventResponse struct {
+	Success bool `json:"success"`
+	Event   struct {
+		ID        string `json:"id"`
+		NetworkID string `json:"networkId"`
+		EventType string `json:"eventType"`
+		Severity  string `json:"severity"`
+		Content   string `json:"content"`
+		CreatedAt string `json:"createdAt"`
+	} `json:"event,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// EmitEvent sends a network event to the control plane.
+// This triggers push notifications and real-time broadcasts to users.
+func (c *Client) EmitEvent(req *EmitEventRequest) (*EmitEventResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/network-events", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	var eventResp EmitEventResponse
+	if err := json.Unmarshal(respBody, &eventResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return &eventResp, fmt.Errorf("emit event failed (HTTP %d): %s", resp.StatusCode, eventResp.Error)
+	}
+
+	return &eventResp, nil
+}
+
+// Common event types for convenience
+const (
+	EventTypeAgentConnected       = "agent_connected"
+	EventTypeAgentDisconnected    = "agent_disconnected"
+	EventTypeAgentHeartbeatMissed = "agent_heartbeat_missed"
+	EventTypeEntityStatusChanged  = "entity_status_changed"
+	EventTypeEntityOffline        = "entity_offline"
+	EventTypeEntityOnline         = "entity_online"
+	EventTypeEntityDegraded       = "entity_degraded"
+	EventTypeHighCPUUsage         = "high_cpu_usage"
+	EventTypeHighMemoryUsage      = "high_memory_usage"
+	EventTypeHighBandwidthUsage   = "high_bandwidth_usage"
+	EventTypePacketLossDetected   = "packet_loss_detected"
+	EventTypeConfigChanged        = "config_changed"
+	EventTypeConfigApplied        = "config_applied"
+	EventTypeConfigFailed         = "config_failed"
+)
