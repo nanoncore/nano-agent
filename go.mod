@@ -2,7 +2,10 @@ module github.com/nanoncore/nano-agent
 
 go 1.23
 
-require github.com/spf13/cobra v1.8.1
+require (
+	github.com/gosnmp/gosnmp v1.38.0
+	github.com/spf13/cobra v1.8.1
+)
 
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
