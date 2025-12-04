@@ -461,6 +461,9 @@ func (c *Client) EmitEvent(req *EmitEventRequest) (*EmitEventResponse, error) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

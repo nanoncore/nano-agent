@@ -728,7 +728,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Config Sync:        %s\n", configSyncInterval)
 	fmt.Println()
 
-	// Create API client with mTLS if certificates are available
+	// Create API client - prefer mTLS, fall back to API key, then unauthenticated
 	var client *agent.Client
 	if cfg.CertFile != "" && cfg.KeyFile != "" && cfg.CAFile != "" {
 		// Check if certificate files exist
@@ -739,11 +739,21 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("failed to create mTLS client: %w", err)
 			}
 		} else {
-			fmt.Printf("Warning: Certificate file not found, using unauthenticated client\n")
+			fmt.Printf("Warning: Certificate file not found\n")
+			client = nil // Will try API key below
+		}
+	}
+
+	// If no mTLS client, try API key authentication
+	if client == nil {
+		creds, _ := agent.LoadCredentials(configDir)
+		if creds != nil && creds.APIKey != "" {
+			fmt.Printf("Using API key authentication\n")
+			client = agent.NewClientWithAPIKey(cfg.APIURL, creds.APIKey)
+		} else {
+			fmt.Printf("Warning: No authentication configured, using unauthenticated client\n")
 			client = agent.NewClient(cfg.APIURL, "")
 		}
-	} else {
-		client = agent.NewClient(cfg.APIURL, "")
 	}
 
 	// Check initial connectivity
