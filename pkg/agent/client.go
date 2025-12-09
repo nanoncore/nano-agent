@@ -17,6 +17,10 @@ type Client struct {
 	baseURL    string
 	httpClient *http.Client
 	token      string
+
+	// Agent-specific fields for na_ API keys
+	agentID           string
+	keyRotationNeeded bool
 }
 
 // EnrollRequest is sent to the control plane during enrollment.
@@ -33,6 +37,18 @@ type EnrollResponse struct {
 	Certificate string `json:"certificate,omitempty"`
 	PrivateKey  string `json:"private_key,omitempty"`
 	CACert      string `json:"ca_cert,omitempty"`
+
+	// Agent API key for per-agent rate limiting (na_ prefix)
+	AgentAPIKey       string `json:"agent_api_key,omitempty"`
+	AgentAPIKeyPrefix string `json:"agent_api_key_prefix,omitempty"`
+	AgentID           string `json:"agent_id,omitempty"`
+
+	// Organization/Network info (returned from enrollment)
+	OrganizationID   string `json:"organization_id,omitempty"`
+	OrganizationName string `json:"organization_name,omitempty"`
+	NetworkID        string `json:"network_id,omitempty"`
+	NetworkName      string `json:"network_name,omitempty"`
+	NetworkSlug      string `json:"network_slug,omitempty"`
 }
 
 // NodeStatus represents the current status of the agent.
@@ -166,12 +182,19 @@ func (c *Client) Heartbeat(req *HeartbeatRequest) (*HeartbeatResponse, error) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	// Use agent API key (na_) for per-agent rate limiting
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Check for server signals (e.g., key rotation required)
+	c.checkResponseHeaders(resp)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -197,11 +220,19 @@ func (c *Client) GetConfig(nodeID string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Use agent API key (na_) for per-agent rate limiting
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Check for server signals (e.g., key rotation required)
+	c.checkResponseHeaders(resp)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -449,6 +480,7 @@ type EmitEventResponse struct {
 
 // EmitEvent sends a network event to the control plane.
 // This triggers push notifications and real-time broadcasts to users.
+// Uses agent API key (na_) for per-agent rate limiting (60 req/min sustained, 120 burst).
 func (c *Client) EmitEvent(req *EmitEventRequest) (*EmitEventResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -461,6 +493,7 @@ func (c *Client) EmitEvent(req *EmitEventRequest) (*EmitEventResponse, error) {
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
+	// Use agent API key (na_) for per-agent rate limiting
 	if c.token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -470,6 +503,9 @@ func (c *Client) EmitEvent(req *EmitEventRequest) (*EmitEventResponse, error) {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
+
+	// Check for server signals (e.g., key rotation required)
+	c.checkResponseHeaders(resp)
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -505,3 +541,102 @@ const (
 	EventTypeConfigApplied        = "config_applied"
 	EventTypeConfigFailed         = "config_failed"
 )
+
+// KeyRotateResponse is returned from the key rotation endpoint.
+type KeyRotateResponse struct {
+	Success           bool   `json:"success"`
+	Message           string `json:"message,omitempty"`
+	AgentAPIKey       string `json:"agent_api_key,omitempty"`
+	AgentAPIKeyPrefix string `json:"agent_api_key_prefix,omitempty"`
+	AgentID           string `json:"agent_id,omitempty"`
+	OldKeyValidUntil  string `json:"old_key_valid_until,omitempty"`
+}
+
+// NewClientWithAgentKey creates a client with an agent-specific API key (na_ prefix).
+// This provides per-agent rate limiting instead of IP-based limiting.
+func NewClientWithAgentKey(baseURL, agentAPIKey, agentID string) *Client {
+	return &Client{
+		baseURL: baseURL,
+		token:   agentAPIKey,
+		agentID: agentID,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
+}
+
+// SetAgentID sets the agent ID for key rotation purposes.
+func (c *Client) SetAgentID(agentID string) {
+	c.agentID = agentID
+}
+
+// GetAgentID returns the agent ID.
+func (c *Client) GetAgentID() string {
+	return c.agentID
+}
+
+// NeedsKeyRotation returns true if the server has signaled that key rotation is required.
+func (c *Client) NeedsKeyRotation() bool {
+	return c.keyRotationNeeded
+}
+
+// ClearKeyRotationFlag clears the key rotation flag after a successful rotation.
+func (c *Client) ClearKeyRotationFlag() {
+	c.keyRotationNeeded = false
+}
+
+// checkResponseHeaders inspects response headers for server signals.
+// Sets keyRotationNeeded if the server sends X-Key-Rotation-Required: true.
+func (c *Client) checkResponseHeaders(resp *http.Response) {
+	if resp.Header.Get("X-Key-Rotation-Required") == "true" {
+		c.keyRotationNeeded = true
+	}
+}
+
+// RotateAgentKey requests a new agent API key from the server.
+// This should be called when NeedsKeyRotation() returns true.
+func (c *Client) RotateAgentKey() (*KeyRotateResponse, error) {
+	if c.agentID == "" {
+		return nil, fmt.Errorf("agent ID not set - cannot rotate key")
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/agents/"+c.agentID+"/keys/rotate", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("key rotation failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var rotateResp KeyRotateResponse
+	if err := json.Unmarshal(respBody, &rotateResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	// Clear the rotation flag after successful rotation
+	c.keyRotationNeeded = false
+
+	return &rotateResp, nil
+}
+
+// UpdateToken updates the client's API token (for use after key rotation).
+func (c *Client) UpdateToken(newToken string) {
+	c.token = newToken
+}

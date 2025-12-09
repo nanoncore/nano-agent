@@ -28,6 +28,11 @@ type Config struct {
 	NetworkID        string `json:"network_id,omitempty"`
 	NetworkName      string `json:"network_name,omitempty"`
 	NetworkSlug      string `json:"network_slug,omitempty"` // K8s namespace
+
+	// Agent API key (na_ prefix) - used for per-agent rate limiting
+	AgentID           string `json:"agent_id,omitempty"`
+	AgentAPIKey       string `json:"agent_api_key,omitempty"`
+	AgentAPIKeyPrefix string `json:"agent_api_key_prefix,omitempty"`
 }
 
 // Credentials holds the user's authentication credentials (stored separately).

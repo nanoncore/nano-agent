@@ -376,7 +376,7 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 			return err
 		}
 
-		// Save configuration with org/network info
+		// Save configuration with org/network info and agent API key
 		fmt.Printf("Saving configuration... ")
 		cfg := &agent.Config{
 			APIURL:           apiURL,
@@ -392,11 +392,23 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 			NetworkSlug:      selectedNet.Slug,
 		}
 
+		// Store agent API key if provided (for per-agent rate limiting)
+		if resp.AgentAPIKey != "" {
+			cfg.AgentID = resp.AgentID
+			cfg.AgentAPIKey = resp.AgentAPIKey
+			cfg.AgentAPIKeyPrefix = resp.AgentAPIKeyPrefix
+		}
+
 		if err := agent.SaveConfig(configDir, cfg); err != nil {
 			fmt.Printf("FAILED\n")
 			return fmt.Errorf("failed to save config: %w", err)
 		}
 		fmt.Printf("OK\n")
+
+		// Log agent key info
+		if resp.AgentAPIKey != "" {
+			fmt.Printf("Agent API key:  %s (per-agent rate limiting enabled)\n", resp.AgentAPIKeyPrefix)
+		}
 
 	} else {
 		// Legacy token mode
@@ -459,11 +471,34 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 			CAFile:   configDir + "/ca.crt",
 		}
 
+		// Store agent API key if provided (for per-agent rate limiting)
+		if resp.AgentAPIKey != "" {
+			cfg.AgentID = resp.AgentID
+			cfg.AgentAPIKey = resp.AgentAPIKey
+			cfg.AgentAPIKeyPrefix = resp.AgentAPIKeyPrefix
+		}
+
+		// Store org/network info if returned from enrollment
+		if resp.OrganizationID != "" {
+			cfg.OrganizationID = resp.OrganizationID
+			cfg.OrganizationName = resp.OrganizationName
+		}
+		if resp.NetworkID != "" {
+			cfg.NetworkID = resp.NetworkID
+			cfg.NetworkName = resp.NetworkName
+			cfg.NetworkSlug = resp.NetworkSlug
+		}
+
 		if err := agent.SaveConfig(configDir, cfg); err != nil {
 			fmt.Printf("FAILED\n")
 			return fmt.Errorf("failed to save config: %w", err)
 		}
 		fmt.Printf("OK\n")
+
+		// Log agent key info
+		if resp.AgentAPIKey != "" {
+			fmt.Printf("Agent API key:  %s (per-agent rate limiting enabled)\n", resp.AgentAPIKeyPrefix)
+		}
 	}
 
 	// Save state
@@ -567,6 +602,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 		if len(cfg.Labels) > 0 {
 			fmt.Printf("  Labels:       %v\n", cfg.Labels)
+		}
+		if cfg.AgentAPIKey != "" {
+			fmt.Printf("  Agent Key:    %s (per-agent rate limiting)\n", cfg.AgentAPIKeyPrefix)
 		}
 		if state.LastSync != "" {
 			fmt.Printf("  Last Sync:    %s\n", state.LastSync)
@@ -728,9 +766,17 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Config Sync:        %s\n", configSyncInterval)
 	fmt.Println()
 
-	// Create API client - prefer mTLS, fall back to API key, then unauthenticated
+	// Create API client - prefer agent API key, then mTLS, then user API key
 	var client *agent.Client
-	if cfg.CertFile != "" && cfg.KeyFile != "" && cfg.CAFile != "" {
+
+	// Priority 1: Agent API key (na_ prefix) for per-agent rate limiting
+	if cfg.AgentAPIKey != "" {
+		fmt.Printf("Using agent API key authentication (%s)\n", cfg.AgentAPIKeyPrefix)
+		client = agent.NewClientWithAgentKey(cfg.APIURL, cfg.AgentAPIKey, cfg.AgentID)
+	}
+
+	// Priority 2: mTLS certificates
+	if client == nil && cfg.CertFile != "" && cfg.KeyFile != "" && cfg.CAFile != "" {
 		// Check if certificate files exist
 		if _, err := os.Stat(cfg.CertFile); err == nil {
 			fmt.Printf("Using mTLS authentication\n")
@@ -740,15 +786,14 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			}
 		} else {
 			fmt.Printf("Warning: Certificate file not found\n")
-			client = nil // Will try API key below
 		}
 	}
 
-	// If no mTLS client, try API key authentication
+	// Priority 3: User API key (nk_ prefix) - legacy mode, will signal rotation
 	if client == nil {
 		creds, _ := agent.LoadCredentials(configDir)
 		if creds != nil && creds.APIKey != "" {
-			fmt.Printf("Using API key authentication\n")
+			fmt.Printf("Using user API key authentication (legacy - will upgrade to agent key)\n")
 			client = agent.NewClientWithAPIKey(cfg.APIURL, creds.APIKey)
 		} else {
 			fmt.Printf("Warning: No authentication configured, using unauthenticated client\n")
@@ -785,7 +830,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	defer configSyncTicker.Stop()
 
 	// Send initial heartbeat
-	sendHeartbeat(client, cfg.NodeID, state)
+	sendHeartbeat(client, cfg.NodeID, state, cfg)
 
 	// Main loop
 	for {
@@ -806,16 +851,16 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			return nil
 
 		case <-heartbeatTicker.C:
-			sendHeartbeat(client, cfg.NodeID, state)
+			sendHeartbeat(client, cfg.NodeID, state, cfg)
 
 		case <-configSyncTicker.C:
-			syncConfig(client, cfg.NodeID, state)
+			syncConfig(client, cfg.NodeID, state, cfg)
 		}
 	}
 }
 
 // sendHeartbeat sends a heartbeat to the control plane
-func sendHeartbeat(client *agent.Client, nodeID string, state *agent.State) {
+func sendHeartbeat(client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config) {
 	vppStatus := checkVPPStatus()
 
 	req := &agent.HeartbeatRequest{
@@ -846,13 +891,18 @@ func sendHeartbeat(client *agent.Client, nodeID string, state *agent.State) {
 		fmt.Printf("[%s] Configuration update available\n", time.Now().Format("15:04:05"))
 	}
 
+	// Check if key rotation is needed (server signaled via header)
+	if client.NeedsKeyRotation() {
+		handleKeyRotation(client, cfg)
+	}
+
 	// Log successful heartbeat (only on debug or first success)
 	fmt.Printf("[%s] Heartbeat OK (VPP: %v, interfaces: %d)\n",
 		time.Now().Format("15:04:05"), vppStatus.Running, vppStatus.Interfaces)
 }
 
 // syncConfig retrieves and applies configuration from the control plane
-func syncConfig(client *agent.Client, nodeID string, state *agent.State) {
+func syncConfig(client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config) {
 	config, err := client.GetConfig(nodeID)
 	if err != nil {
 		fmt.Printf("[%s] Config sync failed: %v\n", time.Now().Format("15:04:05"), err)
@@ -862,11 +912,53 @@ func syncConfig(client *agent.Client, nodeID string, state *agent.State) {
 	// Log config sync
 	fmt.Printf("[%s] Config synced (%d keys)\n", time.Now().Format("15:04:05"), len(config))
 
+	// Check if key rotation is needed (server signaled via header)
+	if client.NeedsKeyRotation() {
+		handleKeyRotation(client, cfg)
+	}
+
 	// TODO: Apply configuration changes
 	// - VPP configuration
 	// - Routing updates
 	// - QoS policies
 	// etc.
+}
+
+// handleKeyRotation handles the key rotation process when server signals it's required
+func handleKeyRotation(client *agent.Client, cfg *agent.Config) {
+	fmt.Printf("[%s] Server requested API key rotation...\n", time.Now().Format("15:04:05"))
+
+	// Request new key from server
+	rotateResp, err := client.RotateAgentKey()
+	if err != nil {
+		fmt.Printf("[%s] Key rotation failed: %v\n", time.Now().Format("15:04:05"), err)
+		return
+	}
+
+	if !rotateResp.Success {
+		fmt.Printf("[%s] Key rotation rejected: %s\n", time.Now().Format("15:04:05"), rotateResp.Message)
+		return
+	}
+
+	// Update local config with new key
+	cfg.AgentID = rotateResp.AgentID
+	cfg.AgentAPIKey = rotateResp.AgentAPIKey
+	cfg.AgentAPIKeyPrefix = rotateResp.AgentAPIKeyPrefix
+
+	// Save updated config
+	if err := agent.SaveConfig(configDir, cfg); err != nil {
+		fmt.Printf("[%s] Failed to save rotated key: %v\n", time.Now().Format("15:04:05"), err)
+		return
+	}
+
+	// Update client to use new key
+	client.UpdateToken(rotateResp.AgentAPIKey)
+	client.SetAgentID(rotateResp.AgentID)
+
+	fmt.Printf("[%s] API key rotated successfully (new: %s, old valid until: %s)\n",
+		time.Now().Format("15:04:05"),
+		rotateResp.AgentAPIKeyPrefix,
+		rotateResp.OldKeyValidUntil)
 }
 
 // runLogin handles the login command
