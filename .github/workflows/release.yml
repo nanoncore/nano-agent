@@ -30,6 +30,9 @@ jobs:
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
       - name: Build binaries
+        env:
+          # Bypass Go proxy for nanoncore modules (new repos not yet indexed)
+          GOPRIVATE: github.com/nanoncore/*
         run: |
           mkdir -p dist release
 
