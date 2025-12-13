@@ -978,7 +978,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	if apiKey == "" {
 		// Prompt for API key
 		fmt.Printf("Get your API key from the Nanoncore dashboard:\n")
-		fmt.Printf("  %s/settings/api-keys\n\n", strings.TrimSuffix(loginAPIURL, "/api"))
+		fmt.Printf("  https://app.nanoncore.com/settings?section=agents\n\n")
 		fmt.Printf("Enter your API key: ")
 
 		reader := bufio.NewReader(os.Stdin)
