@@ -39,21 +39,21 @@ jobs:
           # Build for amd64
           echo "Building for linux/amd64..."
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
             -o dist/nano-agent-linux-amd64 \
             ./cmd/nano-agent
 
           # Build for arm64
           echo "Building for linux/arm64..."
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
-            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
             -o dist/nano-agent-linux-arm64 \
             ./cmd/nano-agent
 
           # Build for riscv64
           echo "Building for linux/riscv64..."
           CGO_ENABLED=0 GOOS=linux GOARCH=riscv64 go build \
-            -ldflags="-s -w -X main.Version=${{ steps.version.outputs.VERSION }}" \
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.VERSION }}" \
             -o dist/nano-agent-linux-riscv64 \
             ./cmd/nano-agent
 
