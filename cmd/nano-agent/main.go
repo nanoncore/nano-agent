@@ -234,11 +234,11 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 	}
 
 	var (
-		apiURL         string
-		client         *agent.Client
-		selectedOrg    *agent.Organization
-		selectedNet    *agent.Network
-		nodeID         string
+		apiURL      string
+		client      *agent.Client
+		selectedOrg *agent.Organization
+		selectedNet *agent.Network
+		nodeID      string
 	)
 
 	if useInteractiveMode {

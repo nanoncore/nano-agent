@@ -12,10 +12,10 @@ import (
 
 // ZTE Enterprise OID and base paths
 const (
-	ZTEEnterprise  = "1.3.6.1.4.1.3902"
-	ZTEC300GPON    = ZTEEnterprise + ".1012" // GPON
-	ZTEC300EPON    = ZTEEnterprise + ".1015" // EPON
-	ZTEAccessNode  = ZTEEnterprise + ".1082" // Titan/AccessNode series
+	ZTEEnterprise = "1.3.6.1.4.1.3902"
+	ZTEC300GPON   = ZTEEnterprise + ".1012" // GPON
+	ZTEC300EPON   = ZTEEnterprise + ".1015" // EPON
+	ZTEAccessNode = ZTEEnterprise + ".1082" // Titan/AccessNode series
 )
 
 // ZTE System OIDs
@@ -31,9 +31,9 @@ var zteSystemOIDs = struct {
 
 // ZTE Card OIDs
 var zteCardOIDs = struct {
-	CardTable      string
-	CardType       string
-	CardStatus     string
+	CardTable       string
+	CardType        string
+	CardStatus      string
 	CardTemperature string
 }{
 	CardTable:       ZTEAccessNode + ".500.1.2.1",
@@ -44,16 +44,16 @@ var zteCardOIDs = struct {
 
 // ZTE ONU OIDs
 var zteOnuOIDs = struct {
-	InfoTable           string
-	SerialNumber        string
-	MAC                 string
-	RunStatus           string
-	Distance            string
-	Type                string
-	SoftwareVersion     string
-	LastOnlineTime      string
-	LastOfflineTime     string
-	LastOfflineReason   string
+	InfoTable         string
+	SerialNumber      string
+	MAC               string
+	RunStatus         string
+	Distance          string
+	Type              string
+	SoftwareVersion   string
+	LastOnlineTime    string
+	LastOfflineTime   string
+	LastOfflineReason string
 }{
 	InfoTable:         ZTEAccessNode + ".500.1.2.4.1",
 	SerialNumber:      ZTEAccessNode + ".500.1.2.4.1.1.3",
@@ -99,8 +99,8 @@ var zteTrafficOIDs = struct {
 
 // ZTE ONU Status values
 const (
-	ZTEOnuStatusOnline    = 1
-	ZTEOnuStatusOffline   = 2
+	ZTEOnuStatusOnline      = 1
+	ZTEOnuStatusOffline     = 2
 	ZTEOnuStatusRegistering = 3
 )
 

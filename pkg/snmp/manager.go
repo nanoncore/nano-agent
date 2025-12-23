@@ -23,8 +23,8 @@ type Manager struct {
 
 // ManagerConfig holds manager configuration.
 type ManagerConfig struct {
-	PollInterval time.Duration   `json:"poll_interval"`
-	Devices      []DeviceConfig  `json:"devices"`
+	PollInterval time.Duration  `json:"poll_interval"`
+	Devices      []DeviceConfig `json:"devices"`
 }
 
 // NewManager creates a new SNMP manager.
@@ -263,11 +263,11 @@ func (m *Manager) DeviceCount() int {
 
 // Summary provides a quick overview of all devices.
 type Summary struct {
-	TotalDevices  int `json:"total_devices"`
-	TotalONUs     int `json:"total_onus"`
-	OnlineONUs    int `json:"online_onus"`
-	OfflineONUs   int `json:"offline_onus"`
-	TotalErrors   int `json:"total_errors"`
+	TotalDevices int `json:"total_devices"`
+	TotalONUs    int `json:"total_onus"`
+	OnlineONUs   int `json:"online_onus"`
+	OfflineONUs  int `json:"offline_onus"`
+	TotalErrors  int `json:"total_errors"`
 }
 
 // GetSummary returns a summary of all devices.

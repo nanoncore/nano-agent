@@ -215,7 +215,7 @@ func (c *FiberHomeCollector) CollectPONPorts(ctx context.Context) ([]PONPort, er
 		}
 
 		ponIdx := ExtractLastIndex(pdu.Name)
-		
+
 		mu.Lock()
 		port, exists := portMap[ponIdx]
 		if !exists {

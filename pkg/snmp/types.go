@@ -98,7 +98,7 @@ type PONPort struct {
 	PortID      int     `json:"port_id"`
 	Name        string  `json:"name,omitempty"`
 	Enabled     bool    `json:"enabled"`
-	Status      string  `json:"status"` // up, down, testing
+	Status      string  `json:"status"`             // up, down, testing
 	PONType     string  `json:"pon_type,omitempty"` // GPON, EPON, XG-PON
 	ONUCount    int     `json:"onu_count"`
 	TxPowerDBm  float64 `json:"tx_power_dbm"`
@@ -116,7 +116,7 @@ type ONUInfo struct {
 	Type            string    `json:"type,omitempty"`
 	Model           string    `json:"model,omitempty"`
 	Description     string    `json:"description,omitempty"`
-	Status          string    `json:"status"` // online, offline
+	Status          string    `json:"status"`   // online, offline
 	Distance        int       `json:"distance"` // meters
 	SoftwareVersion string    `json:"software_version,omitempty"`
 	HardwareVersion string    `json:"hardware_version,omitempty"`
@@ -190,17 +190,17 @@ type Alarm struct {
 
 // OLTTelemetry aggregates all telemetry from an OLT.
 type OLTTelemetry struct {
-	OLTInfo     OLTInfo      `json:"olt_info"`
-	Cards       []CardInfo   `json:"cards,omitempty"`
-	PONPorts    []PONPort    `json:"pon_ports"`
-	ONUs        []ONUInfo    `json:"onus"`
-	UnauthONUs  []UnauthONU  `json:"unauth_onus,omitempty"`
-	ONUOptical  []ONUOptical `json:"onu_optical"`
-	ONUTraffic  []ONUTraffic `json:"onu_traffic,omitempty"`
-	Alarms      []Alarm      `json:"alarms,omitempty"`
-	CollectedAt time.Time    `json:"collected_at"`
+	OLTInfo     OLTInfo       `json:"olt_info"`
+	Cards       []CardInfo    `json:"cards,omitempty"`
+	PONPorts    []PONPort     `json:"pon_ports"`
+	ONUs        []ONUInfo     `json:"onus"`
+	UnauthONUs  []UnauthONU   `json:"unauth_onus,omitempty"`
+	ONUOptical  []ONUOptical  `json:"onu_optical"`
+	ONUTraffic  []ONUTraffic  `json:"onu_traffic,omitempty"`
+	Alarms      []Alarm       `json:"alarms,omitempty"`
+	CollectedAt time.Time     `json:"collected_at"`
 	Duration    time.Duration `json:"duration"`
-	Errors      []string     `json:"errors,omitempty"`
+	Errors      []string      `json:"errors,omitempty"`
 }
 
 // CollectionStats tracks collection statistics.

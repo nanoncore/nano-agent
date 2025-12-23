@@ -220,11 +220,11 @@ func ParseIP(value interface{}) net.IP {
 func ExtractIndex(oid, baseOid string) []int {
 	suffix := strings.TrimPrefix(oid, baseOid)
 	suffix = strings.TrimPrefix(suffix, ".")
-	
+
 	if suffix == "" {
 		return nil
 	}
-	
+
 	parts := strings.Split(suffix, ".")
 	indices := make([]int, 0, len(parts))
 	for _, p := range parts {

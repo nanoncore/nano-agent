@@ -1,97 +1,124 @@
 # nano-agent
+
 Nanoncore edge agent for BNG (Broadband Network Gateway) data plane nodes.
 
 `nano-agent` runs on bare-metal edge nodes and handles:
-  - **Enrollment** with the Nanoncore control plane
-  - **Configuration sync** from the hosted control plane
-  - **Telemetry reporting** (VPP stats, interface counters)
-  - **Health monitoring** and heartbeats
+- **Enrollment** with the Nanoncore control plane
+- **Configuration sync** from the hosted control plane
+- **Telemetry reporting** (VPP stats, interface counters)
+- **Health monitoring** and heartbeats
 
-  The control plane (UI, API, policy store) is hosted by Nanoncore. You run the edge nodes
-  with VPP/DPDK for subscriber traffic.
+The control plane (UI, API, policy store) is hosted by Nanoncore. You run the edge nodes with VPP/DPDK for subscriber traffic.
 
-  ## Installation
+## Supported Architectures
 
-  ### Debian/Ubuntu (amd64)
+| Architecture | Binary | .deb Package | Status |
+|--------------|--------|--------------|--------|
+| linux/amd64  | ✅     | ✅           | Stable |
+| linux/arm64  | ✅     | ✅           | Stable |
+| linux/riscv64| ✅     | ✅           | Stable |
 
-  ```bash
-  curl -L
-  "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent_amd64.deb" -o
-   nano-agent.deb
-  sudo dpkg -i nano-agent.deb
+## Installation
 
-  Debian/Ubuntu (arm64)
+### Debian/Ubuntu (amd64)
 
-  curl -L
-  "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent_arm64.deb" -o
-   nano-agent.deb
-  sudo dpkg -i nano-agent.deb
+```bash
+curl -LO "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent_amd64.deb"
+sudo dpkg -i nano-agent_amd64.deb
+```
 
-  Binary (manual)
+### Debian/Ubuntu (arm64)
 
-  curl -L
-  "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent-linux-amd64"
-  -o nano-agent
-  chmod +x nano-agent
-  sudo mv nano-agent /usr/local/bin/
+```bash
+curl -LO "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent_arm64.deb"
+sudo dpkg -i nano-agent_arm64.deb
+```
 
-  Quick Start
+### Debian/Ubuntu (riscv64)
 
-  1. Enroll with the control plane:
+```bash
+curl -LO "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent_riscv64.deb"
+sudo dpkg -i nano-agent_riscv64.deb
+```
 
-  sudo nano-agent enroll \
-    --api "https://api.nanoncore.com" \
-    --token "YOUR_ENROLLMENT_TOKEN" \
-    --node-id "$(hostname)" \
-    --labels "pop=paris,role=bng"
+### Binary (manual)
 
-  2. Check status:
+```bash
+# amd64
+curl -LO "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent-linux-amd64"
 
-  sudo nano-agent status
+# arm64
+curl -LO "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent-linux-arm64"
 
-  3. Start the service (if installed via .deb):
+# riscv64
+curl -LO "https://github.com/nanoncore/nano-agent/releases/latest/download/nano-agent-linux-riscv64"
 
-  sudo systemctl enable --now nano-agent
+chmod +x nano-agent-linux-*
+sudo mv nano-agent-linux-* /usr/local/bin/nano-agent
+```
 
-  Commands
+## Quick Start
 
-  | Command  | Description                                      |
-  |----------|--------------------------------------------------|
-  | enroll   | Register this node with the control plane        |
-  | status   | Show enrollment status, VPP status, connectivity |
-  | unenroll | Remove registration and clear local config       |
-  | version  | Print version information                        |
+1. Enroll with the control plane:
 
-  Configuration
+```bash
+sudo nano-agent enroll \
+  --api "https://api.nanoncore.com" \
+  --token "YOUR_ENROLLMENT_TOKEN" \
+  --node-id "$(hostname)" \
+  --labels "pop=paris,role=bng"
+```
 
-  Configuration is stored in /etc/nano-agent/ after enrollment:
-  - config.json - API URL, node ID, labels, certificate paths
-  - state.json - Enrollment status, last sync time
+2. Check status:
 
-  Requirements
+```bash
+sudo nano-agent status
+```
 
-  - Linux (amd64 or arm64)
-  - Root access (for VPP integration)
-  - Network access to api.nanoncore.com
+3. Start the service (if installed via .deb):
 
-  Recommended (for full BNG functionality)
+```bash
+sudo systemctl enable --now nano-agent
+```
 
-  - VPP with DPDK plugin
-  - SR-IOV capable NICs
-  - IOMMU enabled
+## Commands
 
-  Documentation
+| Command  | Description                                      |
+|----------|--------------------------------------------------|
+| enroll   | Register this node with the control plane        |
+| status   | Show enrollment status, VPP status, connectivity |
+| unenroll | Remove registration and clear local config       |
+| version  | Print version information                        |
 
-  - https://docs.nanoncore.com/docs/getting-started
-  - https://docs.nanoncore.com/docs/edge-deployment
-  - https://docs.nanoncore.com/docs/architecture
+## Configuration
 
-  Support
+Configuration is stored in `/etc/nano-agent/` after enrollment:
+- `config.json` - API URL, node ID, labels, certificate paths
+- `state.json` - Enrollment status, last sync time
 
-  - Documentation: https://docs.nanoncore.com
-  - Issues: https://github.com/nanoncore/nano-agent/issues
+## Requirements
 
-  License
+- Linux (amd64, arm64, or riscv64)
+- Root access (for VPP integration)
+- Network access to api.nanoncore.com
 
-  Copyright © 2025 Nanoncore. All rights reserved.
-  ```
+### Recommended (for full BNG functionality)
+
+- VPP with DPDK plugin
+- SR-IOV capable NICs
+- IOMMU enabled
+
+## Documentation
+
+- https://docs.nanoncore.com/docs/getting-started
+- https://docs.nanoncore.com/docs/edge-deployment
+- https://docs.nanoncore.com/docs/architecture
+
+## Support
+
+- Documentation: https://docs.nanoncore.com
+- Issues: https://github.com/nanoncore/nano-agent/issues
+
+## License
+
+Apache 2.0 - See [LICENSE](LICENSE) for details.

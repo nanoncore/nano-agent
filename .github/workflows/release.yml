@@ -99,6 +99,12 @@ jobs:
             sudo dpkg -i nano-agent_${{ steps.version.outputs.VERSION }}_arm64.deb
             ```
 
+            ### Debian/Ubuntu (riscv64)
+            ```bash
+            curl -LO https://github.com/nanoncore/nano-agent/releases/download/v${{ steps.version.outputs.VERSION }}/nano-agent_${{ steps.version.outputs.VERSION }}_riscv64.deb
+            sudo dpkg -i nano-agent_${{ steps.version.outputs.VERSION }}_riscv64.deb
+            ```
+
             ### Binary (all architectures)
             ```bash
             # amd64

@@ -47,7 +47,7 @@ var huaweiOntOIDs = struct {
 	Password:        HuaweiXPON + ".2.43.1.4",
 	RunStatus:       HuaweiXPON + ".2.43.1.6",
 	Distance:        HuaweiXPON + ".2.43.1.12",
-	LastUpTime:     HuaweiXPON + ".2.43.1.8",
+	LastUpTime:      HuaweiXPON + ".2.43.1.8",
 	LastDownTime:    HuaweiXPON + ".2.43.1.9",
 	LastDownCause:   HuaweiXPON + ".2.43.1.10",
 	SoftwareVersion: HuaweiXPON + ".2.43.1.14",
@@ -95,6 +95,21 @@ var huaweiTrafficOIDs = struct {
 	TxCrcErrors:  HuaweiXPON + ".2.46.1.8",
 }
 
+// Huawei Auto-Find (Unauthorized ONT) OIDs
+var huaweiAutoFindOIDs = struct {
+	AutoFindTable string
+	SerialNumber  string
+	EquipmentID   string
+	Password      string
+	AutoFindTime  string
+}{
+	AutoFindTable: HuaweiXPON + ".2.44",
+	SerialNumber:  HuaweiXPON + ".2.44.1.2",
+	EquipmentID:   HuaweiXPON + ".2.44.1.3",
+	Password:      HuaweiXPON + ".2.44.1.4",
+	AutoFindTime:  HuaweiXPON + ".2.44.1.5",
+}
+
 // Huawei ONT Status values
 const (
 	HuaweiOntStatusOnline  = 1
@@ -113,7 +128,7 @@ func NewHuaweiCollector(config DeviceConfig) *HuaweiCollector {
 	if len(config.Community) > 0 && len(config.Community) < 8 {
 		config.Community = config.Community + strings.Repeat("_", 8-len(config.Community))
 	}
-	
+
 	return &HuaweiCollector{
 		BaseCollector: NewBaseCollector(config),
 		thresholds:    DefaultOpticalThresholds(),
@@ -238,10 +253,61 @@ func (c *HuaweiCollector) CollectONUs(ctx context.Context) ([]ONUInfo, error) {
 	return onus, nil
 }
 
-// CollectUnauthONUs gathers Huawei unauthorized ONTs.
+// CollectUnauthONUs gathers Huawei unauthorized ONTs from auto-find table.
 func (c *HuaweiCollector) CollectUnauthONUs(ctx context.Context) ([]UnauthONU, error) {
-	// Huawei has a separate auto-find table
-	return nil, nil
+	onuMap := make(map[string]*UnauthONU)
+	var mu sync.Mutex
+
+	err := c.Walk(huaweiAutoFindOIDs.AutoFindTable, func(pdu gosnmp.SnmpPDU) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Huawei auto-find index format: ifIndex.autoFindId
+		indices := ExtractIndex(pdu.Name, huaweiAutoFindOIDs.AutoFindTable)
+		if len(indices) < 2 {
+			return nil
+		}
+
+		ifIndex := indices[len(indices)-2]
+		autoFindId := indices[len(indices)-1]
+		key := fmt.Sprintf("%d.%d", ifIndex, autoFindId)
+
+		mu.Lock()
+		onu, exists := onuMap[key]
+		if !exists {
+			onu = &UnauthONU{
+				PonIndex:  ifIndex,
+				OnuIndex:  autoFindId,
+				FirstSeen: time.Now(),
+			}
+			onuMap[key] = onu
+		}
+		mu.Unlock()
+
+		baseSuffix := pdu.Name[len(huaweiAutoFindOIDs.AutoFindTable):]
+		switch {
+		case strings.HasPrefix(baseSuffix, ".1.2."):
+			onu.SerialNumber = ParseString(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.3."):
+			onu.Type = ParseString(pdu.Value)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect unauthorized ONTs: %w", err)
+	}
+
+	unauthList := make([]UnauthONU, 0, len(onuMap))
+	for _, onu := range onuMap {
+		unauthList = append(unauthList, *onu)
+	}
+
+	return unauthList, nil
 }
 
 // CollectONUOptical gathers Huawei ONT optical power readings.
@@ -360,6 +426,14 @@ func (c *HuaweiCollector) CollectAll(ctx context.Context) (*OLTTelemetry, error)
 		errors = append(errors, fmt.Sprintf("Optical: %v", err))
 	} else {
 		telemetry.ONUOptical = optical
+	}
+
+	// Collect unauthorized ONUs
+	unauthOnus, err := c.CollectUnauthONUs(ctx)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("Unauth ONUs: %v", err))
+	} else {
+		telemetry.UnauthONUs = unauthOnus
 	}
 
 	telemetry.Duration = time.Since(start)

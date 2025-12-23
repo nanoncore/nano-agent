@@ -29,8 +29,8 @@ var vsolSystemOIDs = struct {
 
 // V-SOL PON Port OIDs
 var vsolPonOIDs = struct {
-	PortTable   string
-	PortStatus  string
+	PortTable    string
+	PortStatus   string
 	PortOnuCount string
 }{
 	PortTable:    VSOLOltBase + ".10.11",
@@ -49,6 +49,7 @@ var vsolOnuOIDs = struct {
 	SoftwareVersion string
 	LastOnline      string
 	LastOffline     string
+	OfflineReason   string
 }{
 	InfoTable:       VSOLOltBase + ".12.1",
 	SerialNumber:    VSOLOltBase + ".12.1.1.3",
@@ -59,6 +60,7 @@ var vsolOnuOIDs = struct {
 	SoftwareVersion: VSOLOltBase + ".12.1.1.10",
 	LastOnline:      VSOLOltBase + ".12.1.1.12",
 	LastOffline:     VSOLOltBase + ".12.1.1.13",
+	OfflineReason:   VSOLOltBase + ".12.1.1.14",
 }
 
 // V-SOL Optical Power OIDs
@@ -80,13 +82,45 @@ var vsolOpticalOIDs = struct {
 	BiasCurrent: VSOLOltBase + ".12.8.1.7",
 }
 
-// V-SOL Authentication Mode OIDs  
+// V-SOL Authentication Mode OIDs
 var vsolAuthOIDs = struct {
 	ModeTable string
 	AuthMode  string
 }{
 	ModeTable: VSOLOltBase + ".12.2",
 	AuthMode:  VSOLOltBase + ".12.2.1.2",
+}
+
+// V-SOL Traffic Statistics OIDs
+var vsolTrafficOIDs = struct {
+	TrafficTable string
+	RxBytes      string
+	TxBytes      string
+	RxPackets    string
+	TxPackets    string
+	RxErrors     string
+	TxErrors     string
+}{
+	TrafficTable: VSOLOltBase + ".12.9",
+	RxBytes:      VSOLOltBase + ".12.9.1.2",
+	TxBytes:      VSOLOltBase + ".12.9.1.3",
+	RxPackets:    VSOLOltBase + ".12.9.1.4",
+	TxPackets:    VSOLOltBase + ".12.9.1.5",
+	RxErrors:     VSOLOltBase + ".12.9.1.6",
+	TxErrors:     VSOLOltBase + ".12.9.1.7",
+}
+
+// V-SOL Unauthorized ONU OIDs
+var vsolUnauthOIDs = struct {
+	UnauthTable  string
+	MAC          string
+	SerialNumber string
+	Type         string
+}{
+	UnauthTable:  VSOLOltBase + ".12.3",
+	MAC:          VSOLOltBase + ".12.3.1.3",
+	SerialNumber: VSOLOltBase + ".12.3.1.2",
+	Type:         VSOLOltBase + ".12.3.1.4",
 }
 
 // V-SOL ONU Status values
@@ -169,7 +203,7 @@ func (c *VSOLCollector) CollectPONPorts(ctx context.Context) ([]PONPort, error) 
 		}
 
 		portIdx := indices[len(indices)-1]
-		
+
 		mu.Lock()
 		port, exists := portMap[portIdx]
 		if !exists {
@@ -259,6 +293,8 @@ func (c *VSOLCollector) CollectONUs(ctx context.Context) ([]ONUInfo, error) {
 			onu.Model = ParseString(pdu.Value)
 		case strings.Contains(pdu.Name, vsolOnuOIDs.SoftwareVersion[len(vsolOnuOIDs.InfoTable):]):
 			onu.SoftwareVersion = ParseString(pdu.Value)
+		case strings.Contains(pdu.Name, vsolOnuOIDs.OfflineReason[len(vsolOnuOIDs.InfoTable):]):
+			onu.OfflineReason = parseVSOLDownCause(int(ParseInt64(pdu.Value)))
 		}
 
 		return nil
@@ -278,9 +314,60 @@ func (c *VSOLCollector) CollectONUs(ctx context.Context) ([]ONUInfo, error) {
 
 // CollectUnauthONUs gathers V-SOL unauthorized ONUs.
 func (c *VSOLCollector) CollectUnauthONUs(ctx context.Context) ([]UnauthONU, error) {
-	// V-SOL uses same table with different status filtering
-	// This is a simplified implementation
-	return nil, nil
+	onuMap := make(map[string]*UnauthONU)
+	var mu sync.Mutex
+
+	err := c.Walk(vsolUnauthOIDs.UnauthTable, func(pdu gosnmp.SnmpPDU) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		indices := ExtractIndex(pdu.Name, vsolUnauthOIDs.UnauthTable)
+		if len(indices) < 2 {
+			return nil
+		}
+
+		ponIdx := indices[len(indices)-2]
+		onuIdx := indices[len(indices)-1]
+		key := fmt.Sprintf("%d.%d", ponIdx, onuIdx)
+
+		mu.Lock()
+		onu, exists := onuMap[key]
+		if !exists {
+			onu = &UnauthONU{
+				PonIndex:  ponIdx,
+				OnuIndex:  onuIdx,
+				FirstSeen: time.Now(),
+			}
+			onuMap[key] = onu
+		}
+		mu.Unlock()
+
+		baseSuffix := pdu.Name[len(vsolUnauthOIDs.UnauthTable):]
+		switch {
+		case strings.HasPrefix(baseSuffix, ".1.2."):
+			onu.SerialNumber = ParseString(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.3."):
+			onu.MAC = ParseMAC(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.4."):
+			onu.Type = ParseString(pdu.Value)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect unauthorized ONUs: %w", err)
+	}
+
+	unauthList := make([]UnauthONU, 0, len(onuMap))
+	for _, onu := range onuMap {
+		unauthList = append(unauthList, *onu)
+	}
+
+	return unauthList, nil
 }
 
 // CollectONUOptical gathers V-SOL ONU optical power readings.
@@ -350,6 +437,72 @@ func (c *VSOLCollector) CollectONUOptical(ctx context.Context) ([]ONUOptical, er
 	return opticals, nil
 }
 
+// CollectONUTraffic gathers V-SOL ONU traffic statistics.
+func (c *VSOLCollector) CollectONUTraffic(ctx context.Context) ([]ONUTraffic, error) {
+	trafficMap := make(map[string]*ONUTraffic)
+	var mu sync.Mutex
+
+	err := c.Walk(vsolTrafficOIDs.TrafficTable, func(pdu gosnmp.SnmpPDU) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		indices := ExtractIndex(pdu.Name, vsolTrafficOIDs.TrafficTable)
+		if len(indices) < 2 {
+			return nil
+		}
+
+		ponIdx := indices[len(indices)-2]
+		onuIdx := indices[len(indices)-1]
+		key := fmt.Sprintf("%d.%d", ponIdx, onuIdx)
+
+		mu.Lock()
+		traffic, exists := trafficMap[key]
+		if !exists {
+			slotID := ponIdx / 256
+			portID := ponIdx % 256
+			traffic = &ONUTraffic{
+				PonIndex: ponIdx,
+				OnuIndex: onuIdx,
+				OnuID:    fmt.Sprintf("%d/%d/%d", slotID, portID, onuIdx),
+			}
+			trafficMap[key] = traffic
+		}
+		mu.Unlock()
+
+		baseSuffix := pdu.Name[len(vsolTrafficOIDs.TrafficTable):]
+		switch {
+		case strings.HasPrefix(baseSuffix, ".1.2."):
+			traffic.RxBytes = ParseUint64(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.3."):
+			traffic.TxBytes = ParseUint64(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.4."):
+			traffic.RxPackets = ParseUint64(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.5."):
+			traffic.TxPackets = ParseUint64(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.6."):
+			traffic.RxErrors = ParseUint64(pdu.Value)
+		case strings.HasPrefix(baseSuffix, ".1.7."):
+			traffic.TxErrors = ParseUint64(pdu.Value)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect ONU traffic: %w", err)
+	}
+
+	trafficList := make([]ONUTraffic, 0, len(trafficMap))
+	for _, t := range trafficMap {
+		trafficList = append(trafficList, *t)
+	}
+
+	return trafficList, nil
+}
+
 // CollectAll gathers complete V-SOL OLT telemetry.
 func (c *VSOLCollector) CollectAll(ctx context.Context) (*OLTTelemetry, error) {
 	start := time.Now()
@@ -388,6 +541,22 @@ func (c *VSOLCollector) CollectAll(ctx context.Context) (*OLTTelemetry, error) {
 		errors = append(errors, fmt.Sprintf("Optical: %v", err))
 	} else {
 		telemetry.ONUOptical = optical
+	}
+
+	// Collect ONU traffic statistics
+	traffic, err := c.CollectONUTraffic(ctx)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("Traffic: %v", err))
+	} else {
+		telemetry.ONUTraffic = traffic
+	}
+
+	// Collect unauthorized ONUs
+	unauthOnus, err := c.CollectUnauthONUs(ctx)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("Unauth ONUs: %v", err))
+	} else {
+		telemetry.UnauthONUs = unauthOnus
 	}
 
 	telemetry.Duration = time.Since(start)
@@ -432,4 +601,26 @@ func parseVSOLOpticalPower(value interface{}) float64 {
 		return float64(raw) / 100.0
 	}
 	return -40.0
+}
+
+// parseVSOLDownCause converts V-SOL offline cause codes to readable strings.
+// Note: Cause codes are placeholders - verify via snmpwalk on actual device.
+func parseVSOLDownCause(cause int) string {
+	causes := map[int]string{
+		0:  "unknown",
+		1:  "los",          // Loss of Signal
+		2:  "lof",          // Loss of Frame
+		3:  "dying_gasp",   // Power failure at ONU
+		4:  "power_off",    // ONU powered off
+		5:  "deregister",   // ONU deregistered by OLT
+		6:  "onu_reboot",   // ONU rebooting
+		7:  "ranging_fail", // Ranging failure
+		8:  "lofi",         // Loss of Frame (internal)
+		9:  "loami",        // Loss of PLOAM
+		10: "sf_failure",   // Software failure
+	}
+	if s, ok := causes[cause]; ok {
+		return s
+	}
+	return fmt.Sprintf("unknown(%d)", cause)
 }

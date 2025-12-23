@@ -37,11 +37,11 @@ type Config struct {
 
 // Credentials holds the user's authentication credentials (stored separately).
 type Credentials struct {
-	APIKey       string `json:"api_key,omitempty"`
-	UserID       string `json:"user_id,omitempty"`
-	UserEmail    string `json:"user_email,omitempty"`
-	LoggedInAt   string `json:"logged_in_at,omitempty"`
-	ExpiresAt    string `json:"expires_at,omitempty"`
+	APIKey        string `json:"api_key,omitempty"`
+	UserID        string `json:"user_id,omitempty"`
+	UserEmail     string `json:"user_email,omitempty"`
+	LoggedInAt    string `json:"logged_in_at,omitempty"`
+	ExpiresAt     string `json:"expires_at,omitempty"`
 	DefaultAPIURL string `json:"default_api_url,omitempty"`
 }
 
