@@ -88,7 +88,9 @@ jobs:
             -v "$PWD":/src \
             -w /src \
             -e GOPRIVATE=github.com/nanoncore/* \
-            riscv64/golang:1.23 \
+            -e GOPROXY=https://proxy.golang.org,direct \
+            -e GOTOOLCHAIN=auto \
+            golang:latest \
             sh -c "go mod download && go test -v ./..."
 
   test-riscv64-binary:
@@ -113,12 +115,12 @@ jobs:
           chmod +x nano-agent-linux-riscv64
           docker run --rm --platform linux/riscv64 \
             -v "$PWD":/app \
-            riscv64/debian:bookworm-slim \
+            debian:sid-slim \
             /app/nano-agent-linux-riscv64 version
 
       - name: Test help command
         run: |
           docker run --rm --platform linux/riscv64 \
             -v "$PWD":/app \
-            riscv64/debian:bookworm-slim \
+            debian:sid-slim \
             /app/nano-agent-linux-riscv64 --help
