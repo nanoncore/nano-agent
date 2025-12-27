@@ -4,7 +4,10 @@ import (
 	"testing"
 )
 
-func TestParseVSOLDownCause(t *testing.T) {
+func TestVSOLCollector_ParseDownCause(t *testing.T) {
+	// Test with default config (no overrides)
+	collector := NewVSOLCollector(DeviceConfig{Host: "test"})
+
 	tests := []struct {
 		name     string
 		cause    int
@@ -27,9 +30,40 @@ func TestParseVSOLDownCause(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := parseVSOLDownCause(tt.cause)
+			result := collector.parseDownCause(tt.cause)
 			if result != tt.expected {
-				t.Errorf("parseVSOLDownCause(%d) = %s, want %s", tt.cause, result, tt.expected)
+				t.Errorf("parseDownCause(%d) = %s, want %s", tt.cause, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestVSOLCollector_ParseDownCause_Overrides(t *testing.T) {
+	// Test with config overrides
+	collector := NewVSOLCollector(DeviceConfig{
+		Host: "test",
+		OfflineReasons: map[int]string{
+			1:  "fiber_cut",       // Override default "los"
+			99: "custom_reason",   // Add new code
+		},
+	})
+
+	tests := []struct {
+		name     string
+		cause    int
+		expected string
+	}{
+		{"overridden los to fiber_cut", 1, "fiber_cut"},
+		{"unchanged default lof", 2, "lof"},
+		{"custom code 99", 99, "custom_reason"},
+		{"still unknown for undefined", 200, "unknown(200)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := collector.parseDownCause(tt.cause)
+			if result != tt.expected {
+				t.Errorf("parseDownCause(%d) = %s, want %s", tt.cause, result, tt.expected)
 			}
 		})
 	}

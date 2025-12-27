@@ -132,14 +132,36 @@ const (
 // VSOLCollector implements SNMP collection for V-SOL OLTs.
 type VSOLCollector struct {
 	*BaseCollector
-	thresholds OpticalThresholds
+	thresholds     OpticalThresholds
+	offlineReasons map[int]string
 }
 
 // NewVSOLCollector creates a new V-SOL SNMP collector.
 func NewVSOLCollector(config DeviceConfig) *VSOLCollector {
+	// Start with vendor defaults
+	offlineReasons := map[int]string{
+		0:  "unknown",
+		1:  "los",          // Loss of Signal
+		2:  "lof",          // Loss of Frame
+		3:  "dying_gasp",   // Power failure at ONU
+		4:  "power_off",    // ONU powered off
+		5:  "deregister",   // ONU deregistered by OLT
+		6:  "onu_reboot",   // ONU rebooting
+		7:  "ranging_fail", // Ranging failure
+		8:  "lofi",         // Loss of Frame (internal)
+		9:  "loami",        // Loss of PLOAM
+		10: "sf_failure",   // Software failure
+	}
+
+	// Merge config overrides (overrides take precedence)
+	for code, reason := range config.OfflineReasons {
+		offlineReasons[code] = reason
+	}
+
 	return &VSOLCollector{
-		BaseCollector: NewBaseCollector(config),
-		thresholds:    DefaultOpticalThresholds(),
+		BaseCollector:  NewBaseCollector(config),
+		thresholds:     DefaultOpticalThresholds(),
+		offlineReasons: offlineReasons,
 	}
 }
 
@@ -294,7 +316,7 @@ func (c *VSOLCollector) CollectONUs(ctx context.Context) ([]ONUInfo, error) {
 		case strings.Contains(pdu.Name, vsolOnuOIDs.SoftwareVersion[len(vsolOnuOIDs.InfoTable):]):
 			onu.SoftwareVersion = ParseString(pdu.Value)
 		case strings.Contains(pdu.Name, vsolOnuOIDs.OfflineReason[len(vsolOnuOIDs.InfoTable):]):
-			onu.OfflineReason = parseVSOLDownCause(int(ParseInt64(pdu.Value)))
+			onu.OfflineReason = c.parseDownCause(int(ParseInt64(pdu.Value)))
 		}
 
 		return nil
@@ -603,23 +625,10 @@ func parseVSOLOpticalPower(value interface{}) float64 {
 	return -40.0
 }
 
-// parseVSOLDownCause converts V-SOL offline cause codes to readable strings.
-// Note: Cause codes are placeholders - verify via snmpwalk on actual device.
-func parseVSOLDownCause(cause int) string {
-	causes := map[int]string{
-		0:  "unknown",
-		1:  "los",          // Loss of Signal
-		2:  "lof",          // Loss of Frame
-		3:  "dying_gasp",   // Power failure at ONU
-		4:  "power_off",    // ONU powered off
-		5:  "deregister",   // ONU deregistered by OLT
-		6:  "onu_reboot",   // ONU rebooting
-		7:  "ranging_fail", // Ranging failure
-		8:  "lofi",         // Loss of Frame (internal)
-		9:  "loami",        // Loss of PLOAM
-		10: "sf_failure",   // Software failure
-	}
-	if s, ok := causes[cause]; ok {
+// parseDownCause converts offline cause codes to readable strings.
+// Uses vendor defaults merged with any config overrides.
+func (c *VSOLCollector) parseDownCause(cause int) string {
+	if s, ok := c.offlineReasons[cause]; ok {
 		return s
 	}
 	return fmt.Sprintf("unknown(%d)", cause)

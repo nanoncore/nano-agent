@@ -43,6 +43,9 @@ type DeviceConfig struct {
 	AuthPassword string `json:"auth_password,omitempty"`
 	PrivProtocol string `json:"priv_protocol,omitempty"` // DES, AES
 	PrivPassword string `json:"priv_password,omitempty"`
+
+	// Custom offline reason code overrides (merges with vendor defaults)
+	OfflineReasons map[int]string `json:"offline_reasons,omitempty"`
 }
 
 // Collector defines the interface for vendor-specific SNMP collectors.
