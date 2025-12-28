@@ -640,3 +640,25 @@ func (c *Client) RotateAgentKey() (*KeyRotateResponse, error) {
 func (c *Client) UpdateToken(newToken string) {
 	c.token = newToken
 }
+
+// PostJSON makes a POST request with JSON payload and returns the response.
+// This is a generic helper for API calls that don't need special response parsing.
+func (c *Client) PostJSON(ctx interface{}, path string, jsonData []byte) (*http.Response, error) {
+	httpReq, err := http.NewRequest("POST", c.baseURL+path, bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+
+	c.checkResponseHeaders(resp)
+	return resp, nil
+}
