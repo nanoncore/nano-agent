@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nanoncore/nano-agent/pkg/agent"
+	"github.com/nanoncore/nano-agent/pkg/agent/poller"
 	"github.com/nanoncore/nano-agent/pkg/snmp"
 	southbound "github.com/nanoncore/nano-southbound"
 	"github.com/nanoncore/nano-southbound/types"
@@ -169,6 +170,8 @@ var (
 var (
 	heartbeatInterval  time.Duration
 	configSyncInterval time.Duration
+	enableOLTPolling   bool
+	pollerWorkers      int
 )
 
 // Login flags
@@ -207,6 +210,10 @@ func init() {
 	runCmd.Flags().DurationVar(&configSyncInterval, "config-sync-interval",
 		getEnvDuration("CONFIG_SYNC_INTERVAL", 5*time.Minute),
 		"Interval between configuration syncs (override with CONFIG_SYNC_INTERVAL env)")
+	runCmd.Flags().BoolVar(&enableOLTPolling, "enable-olt-polling", true,
+		"Enable OLT polling for ONU discovery (uses worker pool)")
+	runCmd.Flags().IntVar(&pollerWorkers, "poller-workers", 5,
+		"Number of concurrent OLT polling workers")
 
 	// Login flags
 	loginCmd.Flags().StringVar(&loginAPIURL, "api", defaultAPIURL, "Nanoncore API URL")
@@ -786,6 +793,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	fmt.Printf("API URL:            %s\n", cfg.APIURL)
 	fmt.Printf("Heartbeat Interval: %s\n", heartbeatInterval)
 	fmt.Printf("Config Sync:        %s\n", configSyncInterval)
+	fmt.Printf("OLT Polling:        %v (workers: %d)\n", enableOLTPolling, pollerWorkers)
 	fmt.Println()
 
 	// Create API client - prefer agent API key, then mTLS, then user API key
@@ -851,18 +859,45 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	configSyncTicker := time.NewTicker(configSyncInterval)
 	defer configSyncTicker.Stop()
 
+	// Create OLT poller if enabled
+	var oltPoller *poller.Poller
+	if enableOLTPolling {
+		pollerCfg := &poller.Config{
+			WorkerCount:    pollerWorkers,
+			CheckInterval:  10 * time.Second,
+			MaxBackoff:     5 * time.Minute,
+			ConnectTimeout: 30 * time.Second,
+			LogPrefix:      "[olt-poller]",
+		}
+		adapter := poller.NewClientAdapter(client)
+		oltPoller = poller.New(adapter, pollerCfg)
+		oltPoller.Start(ctx)
+		fmt.Printf("[%s] OLT poller started with %d workers\n", time.Now().Format("15:04:05"), pollerWorkers)
+	}
+
 	// Send initial heartbeat
 	sendHeartbeat(client, cfg.NodeID, state, cfg)
+
+	// Perform initial config sync (populates the poller with OLTs)
+	syncConfigWithPoller(client, cfg.NodeID, state, cfg, oltPoller)
 
 	// Main loop
 	for {
 		select {
 		case <-ctx.Done():
 			fmt.Printf("\nContext cancelled, shutting down...\n")
+			if oltPoller != nil {
+				oltPoller.Stop()
+			}
 			return nil
 
 		case sig := <-sigChan:
 			fmt.Printf("\nReceived signal %v, shutting down gracefully...\n", sig)
+
+			// Stop OLT poller
+			if oltPoller != nil {
+				oltPoller.Stop()
+			}
 
 			// Send final status update
 			finalState := state
@@ -876,7 +911,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			sendHeartbeat(client, cfg.NodeID, state, cfg)
 
 		case <-configSyncTicker.C:
-			syncConfig(client, cfg.NodeID, state, cfg)
+			syncConfigWithPoller(client, cfg.NodeID, state, cfg, oltPoller)
 		}
 	}
 }
@@ -923,25 +958,44 @@ func sendHeartbeat(client *agent.Client, nodeID string, state *agent.State, cfg 
 		time.Now().Format("15:04:05"), vppStatus.Running, vppStatus.Interfaces)
 }
 
-// syncConfig retrieves and applies configuration from the control plane
+// syncConfig retrieves and applies configuration from the control plane (legacy)
 func syncConfig(client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config) {
-	config, err := client.GetConfig(nodeID)
+	syncConfigWithPoller(client, nodeID, state, cfg, nil)
+}
+
+// syncConfigWithPoller retrieves configuration and updates the OLT poller
+func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config, oltPoller *poller.Poller) {
+	// Get typed OLT config
+	oltConfig, err := client.GetOLTConfig(nodeID)
 	if err != nil {
 		fmt.Printf("[%s] Config sync failed: %v\n", time.Now().Format("15:04:05"), err)
 		return
 	}
 
 	// Log config sync
-	fmt.Printf("[%s] Config synced (%d keys)\n", time.Now().Format("15:04:05"), len(config))
+	fmt.Printf("[%s] Config synced (version: %d, OLTs: %d)\n",
+		time.Now().Format("15:04:05"), oltConfig.Version, len(oltConfig.OLTs))
+
+	// Update OLT poller with new config
+	if oltPoller != nil && len(oltConfig.OLTs) > 0 {
+		pollerConfigs := poller.ConvertOLTConfigs(oltConfig.OLTs)
+		oltPoller.UpdateOLTs(pollerConfigs)
+		fmt.Printf("[%s] Updated poller with %d OLTs\n", time.Now().Format("15:04:05"), len(pollerConfigs))
+	}
 
 	// Check if key rotation is needed (server signaled via header)
 	if client.NeedsKeyRotation() {
 		handleKeyRotation(client, cfg)
 	}
 
-	// Process OLT configuration
-	if olts, ok := config["olts"].([]interface{}); ok {
-		applyOLTConfig(olts, state)
+	// Legacy: also apply OLT config via inline monitoring if poller is disabled
+	if oltPoller == nil {
+		config, err := client.GetConfig(nodeID)
+		if err == nil {
+			if olts, ok := config["olts"].([]interface{}); ok {
+				applyOLTConfig(olts, state)
+			}
+		}
 	}
 }
 
@@ -1150,11 +1204,11 @@ func promptString(prompt string, defaultValue string) (string, error) {
 
 // OLTConfig represents the configuration for an OLT device
 type OLTConfig struct {
-	ID       string                 `json:"id"`
-	Name     string                 `json:"name"`
-	Vendor   string                 `json:"vendor"`
-	Model    string                 `json:"model"`
-	Address  string                 `json:"address"`
+	ID        string                 `json:"id"`
+	Name      string                 `json:"name"`
+	Vendor    string                 `json:"vendor"`
+	Model     string                 `json:"model"`
+	Address   string                 `json:"address"`
 	Protocols map[string]interface{} `json:"protocols"`
 	Polling   struct {
 		Enabled  bool     `json:"enabled"`
@@ -1186,12 +1240,12 @@ func parsePollingConfig(oltMap map[string]interface{}) (enabled bool, interval i
 	if !ok {
 		return false, 0, nil
 	}
-	
+
 	enabled, _ = polling["enabled"].(bool)
 	if intervalFloat, ok := polling["interval"].(float64); ok {
 		interval = int(intervalFloat)
 	}
-	
+
 	if metricsList, ok := polling["metrics"].([]interface{}); ok {
 		for _, m := range metricsList {
 			if metric, ok := m.(string); ok {
@@ -1208,13 +1262,13 @@ func parseDiscoveryConfig(oltMap map[string]interface{}) (enabled bool, interval
 	if !ok {
 		return false, 0, "", nil
 	}
-	
+
 	enabled, _ = discovery["enabled"].(bool)
 	if intervalFloat, ok := discovery["interval"].(float64); ok {
 		interval = int(intervalFloat)
 	}
 	protocol, _ = discovery["protocol"].(string)
-	
+
 	if portsList, ok := discovery["ponPorts"].([]interface{}); ok {
 		for _, p := range portsList {
 			if port, ok := p.(string); ok {
@@ -1229,7 +1283,7 @@ func parseDiscoveryConfig(oltMap map[string]interface{}) (enabled bool, interval
 func logOLTConfig(olt OLTConfig) {
 	fmt.Printf("[%s] OLT: %s (%s) at %s\n",
 		time.Now().Format("15:04:05"), olt.Name, olt.Vendor, olt.Address)
-	
+
 	if olt.Discovery.Enabled {
 		protocolStr := olt.Discovery.Protocol
 		if protocolStr == "" {
@@ -1238,7 +1292,7 @@ func logOLTConfig(olt OLTConfig) {
 		fmt.Printf("[%s]   Discovery: enabled, interval=%ds, protocol=%s, ports=%v\n",
 			time.Now().Format("15:04:05"), olt.Discovery.Interval, protocolStr, olt.Discovery.PonPorts)
 	}
-	
+
 	if olt.Polling.Enabled {
 		fmt.Printf("[%s]   Polling: enabled, interval=%ds, metrics=%v\n",
 			time.Now().Format("15:04:05"), olt.Polling.Interval, olt.Polling.Metrics)
@@ -1248,7 +1302,7 @@ func logOLTConfig(olt OLTConfig) {
 // applyOLTConfig processes OLT configuration and starts/updates monitoring
 func applyOLTConfig(olts []interface{}, state *agent.State) {
 	fmt.Printf("[%s] Processing %d OLT(s)...\n", time.Now().Format("15:04:05"), len(olts))
-	
+
 	for _, oltData := range olts {
 		oltMap, ok := oltData.(map[string]interface{})
 		if !ok {
@@ -1409,7 +1463,7 @@ func discoverONUsCLI(ctx context.Context, olt OLTConfig, state *agent.State) err
 	type onuDiscoverer interface {
 		DiscoverONUs(context.Context, []string) ([]types.ONUDiscovery, error)
 	}
-	
+
 	discoverer, ok := driver.(onuDiscoverer)
 	if !ok {
 		fmt.Printf("[%s] OLT %s: Driver does not support DiscoverONUs (type=%T)\n",
@@ -1572,15 +1626,15 @@ func sendONUsToAPI(ctx context.Context, oltID string, onus []snmp.ONUInfo, state
 
 	// Transform ONUs to API format
 	type ONUData struct {
-		OLTID          string  `json:"oltId"`
-		SerialNumber   string  `json:"serialNumber"`
-		PonPort        string  `json:"ponPort"`
-		Status         string  `json:"status"`
-		Distance       *int    `json:"distance,omitempty"`
-		RxPower        *float64 `json:"rxPower,omitempty"`
-		TxPower        *float64 `json:"txPower,omitempty"`
-		Model          *string `json:"model,omitempty"`
-		SoftwareVersion *string `json:"softwareVersion,omitempty"`
+		OLTID           string   `json:"oltId"`
+		SerialNumber    string   `json:"serialNumber"`
+		PonPort         string   `json:"ponPort"`
+		Status          string   `json:"status"`
+		Distance        *int     `json:"distance,omitempty"`
+		RxPower         *float64 `json:"rxPower,omitempty"`
+		TxPower         *float64 `json:"txPower,omitempty"`
+		Model           *string  `json:"model,omitempty"`
+		SoftwareVersion *string  `json:"softwareVersion,omitempty"`
 	}
 
 	onuData := make([]ONUData, 0, len(onus))

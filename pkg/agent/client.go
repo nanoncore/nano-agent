@@ -662,3 +662,166 @@ func (c *Client) PostJSON(ctx interface{}, path string, jsonData []byte) (*http.
 	c.checkResponseHeaders(resp)
 	return resp, nil
 }
+
+// OLTConfig represents an OLT configuration from the control plane.
+type OLTConfig struct {
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	Vendor    string             `json:"vendor"`
+	Model     string             `json:"model"`
+	Address   string             `json:"address"`
+	Protocols OLTProtocols       `json:"protocols"`
+	Polling   OLTPollingConfig   `json:"polling"`
+	Discovery OLTDiscoveryConfig `json:"discovery"`
+}
+
+// OLTProtocols contains protocol configurations for OLT access.
+type OLTProtocols struct {
+	SNMP OLTSNMPConfig `json:"snmp"`
+	SSH  OLTSSHConfig  `json:"ssh"`
+}
+
+// OLTSNMPConfig contains SNMP configuration.
+type OLTSNMPConfig struct {
+	Enabled   bool   `json:"enabled"`
+	Port      int    `json:"port"`
+	Community string `json:"community"`
+	Version   string `json:"version"`
+}
+
+// OLTSSHConfig contains SSH configuration.
+type OLTSSHConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// OLTPollingConfig contains polling configuration.
+type OLTPollingConfig struct {
+	Enabled  bool     `json:"enabled"`
+	Interval int      `json:"interval"`
+	Metrics  []string `json:"metrics"`
+}
+
+// OLTDiscoveryConfig contains discovery configuration.
+type OLTDiscoveryConfig struct {
+	Enabled  bool     `json:"enabled"`
+	Interval int      `json:"interval"`
+	Protocol string   `json:"protocol"`
+	PONPorts []string `json:"ponPorts"`
+}
+
+// AgentConfigResponse is the response from the agent config endpoint.
+type AgentConfigResponse struct {
+	NodeID  string      `json:"nodeId"`
+	Version int         `json:"version"`
+	OLTs    []OLTConfig `json:"olts"`
+}
+
+// GetOLTConfig retrieves OLT configuration from the control plane.
+func (c *Client) GetOLTConfig(nodeID string) (*AgentConfigResponse, error) {
+	httpReq, err := http.NewRequest("GET", c.baseURL+"/api/v1/nodes/"+nodeID+"/config", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	c.checkResponseHeaders(resp)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get OLT config failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var config AgentConfigResponse
+	if err := json.Unmarshal(respBody, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &config, nil
+}
+
+// ONUData represents ONU data to be pushed to the control plane.
+type ONUData struct {
+	Serial          string  `json:"serialNumber"`
+	PONPort         string  `json:"ponPort"`
+	ONUID           int     `json:"onuId,omitempty"`
+	Status          string  `json:"status"`
+	Distance        int     `json:"distance,omitempty"`
+	RxPower         float64 `json:"rxPower,omitempty"`
+	TxPower         float64 `json:"txPower,omitempty"`
+	Model           string  `json:"model,omitempty"`
+	SoftwareVersion string  `json:"softwareVersion,omitempty"`
+}
+
+// PushONUsRequest is the request body for pushing ONUs.
+type PushONUsRequest struct {
+	ONUs []ONUData `json:"onus"`
+}
+
+// PushONUsResponse is the response from pushing ONUs.
+type PushONUsResponse struct {
+	Success     bool   `json:"success"`
+	Message     string `json:"message,omitempty"`
+	Created     int    `json:"created"`
+	Updated     int    `json:"updated"`
+	Unchanged   int    `json:"unchanged"`
+	OnlineCount int    `json:"onlineCount"`
+}
+
+// PushONUs pushes ONU data to the control plane.
+func (c *Client) PushONUs(oltID string, onus []ONUData) (*PushONUsResponse, error) {
+	reqBody := PushONUsRequest{ONUs: onus}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/equipment/"+oltID+"/onus", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	c.checkResponseHeaders(resp)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("push ONUs failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var pushResp PushONUsResponse
+	if err := json.Unmarshal(respBody, &pushResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &pushResp, nil
+}
