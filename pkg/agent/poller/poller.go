@@ -404,14 +404,15 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		}
 
 		result.ONUs[i] = ONUData{
-			Serial:   onu.Serial,
-			PONPort:  onu.PONPort,
-			ONUID:    onu.ONUID,
-			Status:   status,
-			Distance: onu.DistanceM,
-			RxPower:  onu.RxPowerDBm,
-			TxPower:  onu.TxPowerDBm,
-			Model:    onu.Model,
+			Serial:    onu.Serial,
+			PONPort:   onu.PONPort,
+			ONUID:     onu.ONUID,
+			Status:    status,
+			OperState: onu.OperState,
+			Distance:  onu.DistanceM,
+			RxPower:   onu.RxPowerDBm,
+			TxPower:   onu.TxPowerDBm,
+			Model:     onu.Model,
 		}
 	}
 

@@ -761,6 +761,7 @@ type ONUData struct {
 	PONPort         string  `json:"ponPort"`
 	ONUID           int     `json:"onuId,omitempty"`
 	Status          string  `json:"status"`
+	OperState       string  `json:"operState,omitempty"`
 	Distance        int     `json:"distance,omitempty"`
 	RxPower         float64 `json:"rxPower,omitempty"`
 	TxPower         float64 `json:"txPower,omitempty"`
