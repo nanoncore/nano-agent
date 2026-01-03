@@ -343,18 +343,27 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 	vendor := types.Vendor(strings.ToLower(state.Config.Vendor))
 	protocol := p.determineProtocol(state.Config)
 
+	// Get protocol-specific configuration
+	port, username, password := p.getProtocolCredentials(state.Config, protocol)
+
 	config := &types.EquipmentConfig{
 		Name:          state.Config.ID,
 		Vendor:        vendor,
 		Address:       state.Config.Address,
-		Port:          state.Config.Protocols.SSH.Port,
+		Port:          port,
 		Protocol:      protocol,
-		Username:      state.Config.Protocols.SSH.Username,
-		Password:      state.Config.Protocols.SSH.Password,
+		Username:      username,
+		Password:      password,
 		TLSEnabled:    false,
 		TLSSkipVerify: true,
 		Timeout:       p.connectTimeout,
 		Metadata:      make(map[string]string),
+	}
+
+	// Add SNMP-specific config to metadata
+	if protocol == types.ProtocolSNMP {
+		config.Metadata["snmp_community"] = state.Config.Protocols.SNMP.Community
+		config.Metadata["snmp_version"] = state.Config.Protocols.SNMP.Version
 	}
 
 	driver, err := southbound.NewDriver(vendor, protocol, config)
@@ -422,16 +431,108 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 
 // determineProtocol determines the best protocol to use for an OLT.
 func (p *Poller) determineProtocol(cfg OLTConfig) types.Protocol {
-	// Prefer SSH/CLI if enabled
-	if cfg.Protocols.SSH.Enabled {
+	// Use Primary field if set
+	if cfg.Protocols.Primary != "" {
+		switch cfg.Protocols.Primary {
+		case "cli", "ssh":
+			return types.ProtocolCLI
+		case "snmp":
+			return types.ProtocolSNMP
+		case "netconf":
+			return types.ProtocolNETCONF
+		case "gnmi":
+			return types.ProtocolGNMI
+		case "rest":
+			return types.ProtocolREST
+		}
+	}
+
+	// Check new multi-protocol format
+	if cfg.Protocols.CLI != nil && cfg.Protocols.CLI.Enabled {
 		return types.ProtocolCLI
 	}
-	// Fall back to SNMP if enabled
 	if cfg.Protocols.SNMP.Enabled {
 		return types.ProtocolSNMP
 	}
+
+	// Legacy: check SSH
+	if cfg.Protocols.SSH.Enabled {
+		return types.ProtocolCLI
+	}
+
 	// Default to CLI
 	return types.ProtocolCLI
+}
+
+// getProtocolCredentials returns the port, username, and password for the given protocol.
+func (p *Poller) getProtocolCredentials(cfg OLTConfig, protocol types.Protocol) (port int, username, password string) {
+	switch protocol {
+	case types.ProtocolSNMP:
+		port = cfg.Protocols.SNMP.Port
+		if port == 0 {
+			port = 161
+		}
+		// SNMP uses community string, not username/password
+		return port, "", ""
+
+	case types.ProtocolCLI:
+		// Check new CLI config first
+		if cfg.Protocols.CLI != nil && cfg.Protocols.CLI.Enabled {
+			port = cfg.Protocols.CLI.Port
+			username = cfg.Protocols.CLI.Username
+			password = cfg.Protocols.CLI.Password
+		} else {
+			// Fallback to legacy SSH config
+			port = cfg.Protocols.SSH.Port
+			username = cfg.Protocols.SSH.Username
+			password = cfg.Protocols.SSH.Password
+		}
+		if port == 0 {
+			port = 22
+		}
+		return port, username, password
+
+	case types.ProtocolNETCONF:
+		if cfg.Protocols.NETCONF != nil {
+			port = cfg.Protocols.NETCONF.Port
+			username = cfg.Protocols.NETCONF.Username
+			password = cfg.Protocols.NETCONF.Password
+		}
+		if port == 0 {
+			port = 830
+		}
+		return port, username, password
+
+	case types.ProtocolGNMI:
+		if cfg.Protocols.GNMI != nil {
+			port = cfg.Protocols.GNMI.Port
+			username = cfg.Protocols.GNMI.Username
+			password = cfg.Protocols.GNMI.Password
+		}
+		if port == 0 {
+			port = 6030
+		}
+		return port, username, password
+
+	case types.ProtocolREST:
+		if cfg.Protocols.REST != nil {
+			port = cfg.Protocols.REST.Port
+			username = cfg.Protocols.REST.Username
+			password = cfg.Protocols.REST.Password
+		}
+		if port == 0 {
+			port = 443
+		}
+		return port, username, password
+
+	default:
+		// Default to SSH/CLI
+		port = cfg.Protocols.SSH.Port
+		if port == 0 {
+			port = 22
+		}
+		return port, cfg.Protocols.SSH.Username, cfg.Protocols.SSH.Password
+	}
 }
 
 // processResults handles poll results from workers.
