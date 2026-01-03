@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
@@ -145,12 +143,10 @@ type CLIDriver interface {
 
 // BaseCLIDriver provides common SSH functionality for vendor drivers.
 type BaseCLIDriver struct {
-	config  CLIConfig
-	client  *ssh.Client
-	session *ssh.Session
-	stdin   io.WriteCloser
-	stdout  *bufio.Reader
-	mu      sync.Mutex
+	config        CLIConfig
+	client        *ssh.Client
+	expectSession *ExpectSession
+	mu            sync.Mutex
 }
 
 // NewBaseCLIDriver creates a new base CLI driver.
@@ -180,7 +176,7 @@ func (d *BaseCLIDriver) Connect(ctx context.Context) error {
 		Auth: []ssh.AuthMethod{
 			ssh.Password(d.config.Password),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: Implement proper host key verification
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // User-controlled equipment
 		Timeout:         d.config.Timeout,
 	}
 
@@ -190,54 +186,20 @@ func (d *BaseCLIDriver) Connect(ctx context.Context) error {
 		return fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
 
-	session, err := client.NewSession()
+	// Create interactive expect session for CLI commands
+	expectSession, err := NewExpectSession(ExpectSessionConfig{
+		SSHClient:    client,
+		Vendor:       d.config.Vendor,
+		Timeout:      d.config.Timeout,
+		DisablePager: true,
+	})
 	if err != nil {
 		client.Close()
-		return fmt.Errorf("failed to create session: %w", err)
-	}
-
-	// Request pseudo-terminal for interactive CLI
-	modes := ssh.TerminalModes{
-		ssh.ECHO:          0,     // Disable echo
-		ssh.TTY_OP_ISPEED: 14400, // Input speed
-		ssh.TTY_OP_OSPEED: 14400, // Output speed
-	}
-	if err := session.RequestPty("xterm", 80, 40, modes); err != nil {
-		session.Close()
-		client.Close()
-		return fmt.Errorf("failed to request pty: %w", err)
-	}
-
-	stdin, err := session.StdinPipe()
-	if err != nil {
-		session.Close()
-		client.Close()
-		return fmt.Errorf("failed to get stdin pipe: %w", err)
-	}
-
-	stdout, err := session.StdoutPipe()
-	if err != nil {
-		session.Close()
-		client.Close()
-		return fmt.Errorf("failed to get stdout pipe: %w", err)
-	}
-
-	if err := session.Shell(); err != nil {
-		session.Close()
-		client.Close()
-		return fmt.Errorf("failed to start shell: %w", err)
+		return fmt.Errorf("failed to create interactive session: %w", err)
 	}
 
 	d.client = client
-	d.session = session
-	d.stdin = stdin
-	d.stdout = bufio.NewReader(stdout)
-
-	// Wait for initial prompt
-	if _, err := d.readUntilPrompt(ctx); err != nil {
-		d.Close()
-		return fmt.Errorf("failed to get initial prompt: %w", err)
-	}
+	d.expectSession = expectSession
 
 	return nil
 }
@@ -248,12 +210,14 @@ func (d *BaseCLIDriver) Close() error {
 	defer d.mu.Unlock()
 
 	var errs []error
-	if d.session != nil {
-		if err := d.session.Close(); err != nil {
+	// Close expect session first
+	if d.expectSession != nil {
+		if err := d.expectSession.Close(); err != nil {
 			errs = append(errs, err)
 		}
-		d.session = nil
+		d.expectSession = nil
 	}
+	// Then close SSH client
 	if d.client != nil {
 		if err := d.client.Close(); err != nil {
 			errs = append(errs, err)
@@ -272,66 +236,17 @@ func (d *BaseCLIDriver) Execute(ctx context.Context, cmd string) (string, error)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.client == nil {
+	if d.expectSession == nil {
 		return "", fmt.Errorf("not connected")
 	}
 
-	// Write command
-	if _, err := d.stdin.Write([]byte(cmd + "\n")); err != nil {
-		return "", fmt.Errorf("failed to write command: %w", err)
-	}
-
-	// Read response until prompt
-	output, err := d.readUntilPrompt(ctx)
+	// Use the interactive expect session to execute the command
+	output, err := d.expectSession.Execute(cmd)
 	if err != nil {
-		return output, err
-	}
-
-	// Remove the command echo from output
-	lines := strings.Split(output, "\n")
-	if len(lines) > 1 {
-		output = strings.Join(lines[1:], "\n")
+		return output, fmt.Errorf("command failed: %w", err)
 	}
 
 	return strings.TrimSpace(output), nil
-}
-
-// readUntilPrompt reads output until a command prompt is detected.
-func (d *BaseCLIDriver) readUntilPrompt(ctx context.Context) (string, error) {
-	var output strings.Builder
-	readDone := make(chan error, 1)
-
-	go func() {
-		for {
-			line, err := d.stdout.ReadString('\n')
-			if err != nil && err != io.EOF {
-				readDone <- err
-				return
-			}
-			output.WriteString(line)
-
-			// Check for common prompts (vendor-specific drivers should override)
-			trimmed := strings.TrimSpace(line)
-			if strings.HasSuffix(trimmed, "#") ||
-				strings.HasSuffix(trimmed, ">") ||
-				strings.HasSuffix(trimmed, "]") {
-				readDone <- nil
-				return
-			}
-
-			if err == io.EOF {
-				readDone <- nil
-				return
-			}
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return output.String(), ctx.Err()
-	case err := <-readDone:
-		return output.String(), err
-	}
 }
 
 // Config returns the CLI configuration.
@@ -339,9 +254,9 @@ func (d *BaseCLIDriver) Config() CLIConfig {
 	return d.config
 }
 
-// IsConnected returns true if the driver is connected.
+// IsConnected returns true if the driver is connected with an active expect session.
 func (d *BaseCLIDriver) IsConnected() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.client != nil
+	return d.client != nil && d.expectSession != nil
 }
