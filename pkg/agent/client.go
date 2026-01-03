@@ -28,6 +28,7 @@ type EnrollRequest struct {
 	NodeID string            `json:"node_id"`
 	Token  string            `json:"token"`
 	Labels map[string]string `json:"labels,omitempty"`
+	Roles  []string          `json:"roles,omitempty"` // ["olt", "bng"] - equipment types to manage
 }
 
 // EnrollResponse is returned from the control plane after enrollment.
@@ -400,6 +401,7 @@ type EnrollRequestV2 struct {
 	NodeID         string            `json:"node_id"`
 	Token          string            `json:"token,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
+	Roles          []string          `json:"roles,omitempty"` // ["olt", "bng"] - equipment types to manage
 	OrganizationID string            `json:"organization_id"`
 	NetworkID      string            `json:"network_id"`
 	NetworkSlug    string            `json:"network_slug"` // K8s namespace

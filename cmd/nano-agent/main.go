@@ -164,6 +164,7 @@ var (
 	enrollToken  string
 	enrollNodeID string
 	enrollLabels string
+	enrollRoles  string
 )
 
 // Run flags
@@ -203,6 +204,7 @@ func init() {
 	enrollCmd.Flags().StringVar(&enrollToken, "token", "", "Enrollment token (uses API key auth if logged in)")
 	enrollCmd.Flags().StringVar(&enrollNodeID, "node-id", "", "Unique node identifier (prompted if not set)")
 	enrollCmd.Flags().StringVar(&enrollLabels, "labels", "", "Node labels (key=value,key2=value2)")
+	enrollCmd.Flags().StringVar(&enrollRoles, "roles", "", "Equipment roles this agent can manage (olt,bng)")
 
 	// Run flags
 	runCmd.Flags().DurationVar(&heartbeatInterval, "heartbeat-interval", 30*time.Second,
@@ -258,6 +260,17 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 			kv := strings.SplitN(pair, "=", 2)
 			if len(kv) == 2 {
 				labels[strings.TrimSpace(kv[0])] = strings.TrimSpace(kv[1])
+			}
+		}
+	}
+
+	// Parse roles (comma-separated list of equipment types: olt,bng)
+	var roles []string
+	if enrollRoles != "" {
+		for _, role := range strings.Split(enrollRoles, ",") {
+			role = strings.TrimSpace(strings.ToLower(role))
+			if role != "" {
+				roles = append(roles, role)
 			}
 		}
 	}
@@ -376,6 +389,9 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		if len(labels) > 0 {
 			fmt.Printf("  Labels:       %v\n", labels)
 		}
+		if len(roles) > 0 {
+			fmt.Printf("  Roles:        %v\n", roles)
+		}
 		fmt.Println()
 
 		// Send enrollment request (V2 with org/network)
@@ -383,6 +399,7 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		enrollReq := &agent.EnrollRequestV2{
 			NodeID:         nodeID,
 			Labels:         labels,
+			Roles:          roles,
 			OrganizationID: selectedOrg.ID,
 			NetworkID:      selectedNet.ID,
 			NetworkSlug:    selectedNet.Slug,
@@ -453,6 +470,9 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		if len(labels) > 0 {
 			fmt.Printf("Labels:   %v\n", labels)
 		}
+		if len(roles) > 0 {
+			fmt.Printf("Roles:    %v\n", roles)
+		}
 		fmt.Println()
 
 		// Create client and check API health
@@ -470,6 +490,7 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 			NodeID: nodeID,
 			Token:  enrollToken,
 			Labels: labels,
+			Roles:  roles,
 		}
 
 		resp, err := client.Enroll(enrollReq)
