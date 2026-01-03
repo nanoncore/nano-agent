@@ -678,9 +678,59 @@ type OLTConfig struct {
 }
 
 // OLTProtocols contains protocol configurations for OLT access.
+// Supports both legacy format (snmp/ssh fields) and new multi-protocol format (primary + protocol map).
 type OLTProtocols struct {
+	// New multi-protocol format
+	Primary string `json:"primary,omitempty"` // Primary protocol: cli, snmp, netconf, gnmi, rest
+
+	// Protocol-specific configurations (new format)
+	CLI     *OLTCLIConfig     `json:"cli,omitempty"`
+	NETCONF *OLTNETCONFConfig `json:"netconf,omitempty"`
+	GNMI    *OLTGNMIConfig    `json:"gnmi,omitempty"`
+	REST    *OLTRESTConfig    `json:"rest,omitempty"`
+
+	// Legacy format (still supported)
 	SNMP OLTSNMPConfig `json:"snmp"`
 	SSH  OLTSSHConfig  `json:"ssh"`
+}
+
+// OLTCLIConfig contains CLI/SSH configuration for OLT access.
+type OLTCLIConfig struct {
+	Enabled           bool   `json:"enabled"`
+	Port              int    `json:"port"`
+	Username          string `json:"username,omitempty"`
+	Password          string `json:"password,omitempty"`
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+}
+
+// OLTNETCONFConfig contains NETCONF configuration.
+type OLTNETCONFConfig struct {
+	Enabled           bool   `json:"enabled"`
+	Port              int    `json:"port"`
+	Username          string `json:"username,omitempty"`
+	Password          string `json:"password,omitempty"`
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+}
+
+// OLTGNMIConfig contains gNMI configuration.
+type OLTGNMIConfig struct {
+	Enabled           bool   `json:"enabled"`
+	Port              int    `json:"port"`
+	Username          string `json:"username,omitempty"`
+	Password          string `json:"password,omitempty"`
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+	TLSEnabled        bool   `json:"tlsEnabled,omitempty"`
+}
+
+// OLTRESTConfig contains REST API configuration.
+type OLTRESTConfig struct {
+	Enabled           bool   `json:"enabled"`
+	Port              int    `json:"port"`
+	Username          string `json:"username,omitempty"`
+	Password          string `json:"password,omitempty"`
+	CredentialsSecret string `json:"credentialsSecret,omitempty"`
+	TLSEnabled        bool   `json:"tlsEnabled,omitempty"`
+	BasePath          string `json:"basePath,omitempty"`
 }
 
 // OLTSNMPConfig contains SNMP configuration.
@@ -712,6 +762,147 @@ type OLTDiscoveryConfig struct {
 	Interval int      `json:"interval"`
 	Protocol string   `json:"protocol"`
 	PONPorts []string `json:"ponPorts"`
+}
+
+// GetPrimaryProtocol returns the primary protocol for this OLT.
+// Falls back to "cli" if not specified, or checks legacy SSH/SNMP config.
+func (p *OLTProtocols) GetPrimaryProtocol() string {
+	if p.Primary != "" {
+		return p.Primary
+	}
+	// Check new format CLI first
+	if p.CLI != nil && p.CLI.Enabled {
+		return "cli"
+	}
+	// Legacy: check SSH
+	if p.SSH.Enabled {
+		return "cli"
+	}
+	// Check SNMP
+	if p.SNMP.Enabled {
+		return "snmp"
+	}
+	// Check other protocols
+	if p.NETCONF != nil && p.NETCONF.Enabled {
+		return "netconf"
+	}
+	if p.GNMI != nil && p.GNMI.Enabled {
+		return "gnmi"
+	}
+	if p.REST != nil && p.REST.Enabled {
+		return "rest"
+	}
+	// Default to cli
+	return "cli"
+}
+
+// HasProtocol checks if a specific protocol is enabled.
+func (p *OLTProtocols) HasProtocol(protocol string) bool {
+	switch protocol {
+	case "cli", "ssh":
+		// Check new format CLI
+		if p.CLI != nil && p.CLI.Enabled {
+			return true
+		}
+		// Legacy: check SSH
+		return p.SSH.Enabled
+	case "snmp":
+		return p.SNMP.Enabled
+	case "netconf":
+		return p.NETCONF != nil && p.NETCONF.Enabled
+	case "gnmi":
+		return p.GNMI != nil && p.GNMI.Enabled
+	case "rest":
+		return p.REST != nil && p.REST.Enabled
+	default:
+		return false
+	}
+}
+
+// GetEnabledProtocols returns a list of all enabled protocol names.
+func (p *OLTProtocols) GetEnabledProtocols() []string {
+	var enabled []string
+	if p.CLI != nil && p.CLI.Enabled {
+		enabled = append(enabled, "cli")
+	} else if p.SSH.Enabled {
+		// Legacy SSH maps to CLI
+		enabled = append(enabled, "cli")
+	}
+	if p.SNMP.Enabled {
+		enabled = append(enabled, "snmp")
+	}
+	if p.NETCONF != nil && p.NETCONF.Enabled {
+		enabled = append(enabled, "netconf")
+	}
+	if p.GNMI != nil && p.GNMI.Enabled {
+		enabled = append(enabled, "gnmi")
+	}
+	if p.REST != nil && p.REST.Enabled {
+		enabled = append(enabled, "rest")
+	}
+	return enabled
+}
+
+// NormalizeLegacyFormat converts legacy SSH config to new CLI format if needed.
+// This ensures backward compatibility while using the new protocol model.
+func (p *OLTProtocols) NormalizeLegacyFormat() {
+	// If SSH is enabled but CLI is not set, convert SSH to CLI
+	if p.SSH.Enabled && p.CLI == nil {
+		p.CLI = &OLTCLIConfig{
+			Enabled:  true,
+			Port:     p.SSH.Port,
+			Username: p.SSH.Username,
+			Password: p.SSH.Password,
+		}
+	}
+	// Set default primary if not specified
+	if p.Primary == "" {
+		p.Primary = p.GetPrimaryProtocol()
+	}
+}
+
+// VendorCapability defines the required protocols for a vendor.
+type VendorCapability struct {
+	ConfigMethod    string // Required protocol for configuration (cli, netconf, etc.)
+	TelemetryMethod string // Required protocol for telemetry (snmp, gnmi, etc.)
+}
+
+// VendorCapabilityMatrix maps vendor names to their capability requirements.
+// This is used to validate that required protocols are enabled for each vendor.
+var VendorCapabilityMatrix = map[string]VendorCapability{
+	"huawei": {ConfigMethod: "cli", TelemetryMethod: "snmp"},
+	"zte":    {ConfigMethod: "cli", TelemetryMethod: "snmp"},
+	"vsol":   {ConfigMethod: "cli", TelemetryMethod: "snmp"},
+	"cdata":  {ConfigMethod: "cli", TelemetryMethod: "snmp"},
+	"nokia":  {ConfigMethod: "netconf", TelemetryMethod: "gnmi"},
+	"adtran": {ConfigMethod: "netconf", TelemetryMethod: "snmp"},
+}
+
+// ValidateProtocolsForVendor validates that required protocols are enabled for the vendor.
+// Returns an error if a required protocol is not enabled.
+func (cfg *OLTConfig) ValidateProtocolsForVendor() error {
+	vendor := cfg.Vendor
+	if vendor == "" {
+		return nil // No vendor specified, skip validation
+	}
+
+	cap, ok := VendorCapabilityMatrix[vendor]
+	if !ok {
+		// Unknown vendor, allow any protocol configuration
+		return nil
+	}
+
+	// Validate ConfigMethod is enabled
+	if cap.ConfigMethod != "" && !cfg.Protocols.HasProtocol(cap.ConfigMethod) {
+		return fmt.Errorf("vendor %s requires config protocol %s but it is not enabled", vendor, cap.ConfigMethod)
+	}
+
+	// Validate TelemetryMethod is enabled
+	if cap.TelemetryMethod != "" && !cfg.Protocols.HasProtocol(cap.TelemetryMethod) {
+		return fmt.Errorf("vendor %s requires telemetry protocol %s but it is not enabled", vendor, cap.TelemetryMethod)
+	}
+
+	return nil
 }
 
 // AgentConfigResponse is the response from the agent config endpoint.

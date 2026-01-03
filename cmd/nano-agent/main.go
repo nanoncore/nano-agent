@@ -997,9 +997,32 @@ func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.Stat
 	fmt.Printf("[%s] Config synced (version: %d, OLTs: %d)\n",
 		time.Now().Format("15:04:05"), oltConfig.Version, len(oltConfig.OLTs))
 
-	// Update OLT poller with new config
-	if oltPoller != nil && len(oltConfig.OLTs) > 0 {
-		pollerConfigs := poller.ConvertOLTConfigs(oltConfig.OLTs)
+	// Normalize and validate each OLT config
+	validOLTs := make([]agent.OLTConfig, 0, len(oltConfig.OLTs))
+	for i := range oltConfig.OLTs {
+		olt := &oltConfig.OLTs[i]
+
+		// Normalize legacy format to new multi-protocol format
+		olt.Protocols.NormalizeLegacyFormat()
+
+		// Log enabled protocols
+		enabledProtos := olt.Protocols.GetEnabledProtocols()
+		fmt.Printf("[%s]   OLT %s: vendor=%s, primary=%s, protocols=%v\n",
+			time.Now().Format("15:04:05"), olt.Name, olt.Vendor,
+			olt.Protocols.GetPrimaryProtocol(), enabledProtos)
+
+		// Validate vendor protocol requirements
+		if err := olt.ValidateProtocolsForVendor(); err != nil {
+			fmt.Printf("[%s]   Warning: %v\n", time.Now().Format("15:04:05"), err)
+			// Continue anyway - the OLT may still be partially operational
+		}
+
+		validOLTs = append(validOLTs, *olt)
+	}
+
+	// Update OLT poller with validated configs
+	if oltPoller != nil && len(validOLTs) > 0 {
+		pollerConfigs := poller.ConvertOLTConfigs(validOLTs)
 		oltPoller.UpdateOLTs(pollerConfigs)
 		fmt.Printf("[%s] Updated poller with %d OLTs\n", time.Now().Format("15:04:05"), len(pollerConfigs))
 	}
