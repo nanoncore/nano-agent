@@ -187,11 +187,14 @@ func (d *BaseCLIDriver) Connect(ctx context.Context) error {
 	}
 
 	// Create interactive expect session for CLI commands
+	// Pass credentials for double-login scenarios (e.g., V-Sol OLTs)
 	expectSession, err := NewExpectSession(ExpectSessionConfig{
 		SSHClient:    client,
 		Vendor:       d.config.Vendor,
 		Timeout:      d.config.Timeout,
 		DisablePager: true,
+		Username:     d.config.Username,
+		Password:     d.config.Password,
 	})
 	if err != nil {
 		client.Close()

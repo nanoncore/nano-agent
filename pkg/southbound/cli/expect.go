@@ -51,6 +51,9 @@ type ExpectSessionConfig struct {
 	Timeout      time.Duration
 	CustomPrompt *regexp.Regexp
 	DisablePager bool
+	// Credentials for CLI-level authentication (double-login scenarios like V-Sol)
+	Username string
+	Password string
 }
 
 // NewExpectSession creates a new interactive CLI session using expect
@@ -90,10 +93,47 @@ func NewExpectSession(cfg ExpectSessionConfig) (*ExpectSession, error) {
 		vendor:    cfg.Vendor,
 	}
 
-	// Wait for initial prompt
-	if _, _, err := exp.Expect(promptRE, cfg.Timeout); err != nil {
+	// Handle double-login scenarios (e.g., V-Sol OLTs that require CLI-level auth after SSH)
+	// Try to detect either: CLI prompt, "Login:", or "Username:"
+	loginRE := regexp.MustCompile(`(?i)(Login|Username)\s*:\s*$`)
+	passwordRE := regexp.MustCompile(`(?i)Password\s*:\s*$`)
+	combinedRE := regexp.MustCompile(`(?m)(` + promptRE.String() + `|(?i)(Login|Username)\s*:\s*$)`)
+
+	output, _, err := exp.Expect(combinedRE, cfg.Timeout)
+	if err != nil {
 		exp.Close()
-		return nil, fmt.Errorf("failed to detect initial prompt: %w", err)
+		return nil, fmt.Errorf("failed to detect initial prompt or login: %w", err)
+	}
+
+	// Check if we got a login prompt instead of CLI prompt
+	if loginRE.MatchString(output) {
+		// Send username
+		if cfg.Username == "" {
+			exp.Close()
+			return nil, fmt.Errorf("CLI login required but no username provided")
+		}
+		if err := exp.Send(cfg.Username + "\n"); err != nil {
+			exp.Close()
+			return nil, fmt.Errorf("failed to send username: %w", err)
+		}
+
+		// Wait for password prompt
+		if _, _, err := exp.Expect(passwordRE, cfg.Timeout); err != nil {
+			exp.Close()
+			return nil, fmt.Errorf("failed to detect password prompt: %w", err)
+		}
+
+		// Send password
+		if err := exp.Send(cfg.Password + "\n"); err != nil {
+			exp.Close()
+			return nil, fmt.Errorf("failed to send password: %w", err)
+		}
+
+		// Wait for CLI prompt after authentication
+		if _, _, err := exp.Expect(promptRE, cfg.Timeout); err != nil {
+			exp.Close()
+			return nil, fmt.Errorf("failed to detect CLI prompt after login: %w", err)
+		}
 	}
 
 	// Disable pager if requested (non-fatal if it fails)
