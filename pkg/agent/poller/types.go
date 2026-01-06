@@ -185,6 +185,7 @@ type ONUData struct {
 	ONUID           int     `json:"onuId,omitempty"`
 	Status          string  `json:"status"`
 	OperState       string  `json:"operState,omitempty"`
+	OfflineReason   string  `json:"offlineReason,omitempty"` // los, dying_gasp, low_power, unauthorized, etc.
 	Distance        int     `json:"distance,omitempty"`
 	RxPower         float64 `json:"rxPower,omitempty"`
 	TxPower         float64 `json:"txPower,omitempty"`

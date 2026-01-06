@@ -392,7 +392,7 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		return result
 	}
 
-	// Get ONU list
+	// Get provisioned ONU list
 	onus, err := driverV2.GetONUList(ctx, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get ONU list: %w", err)
@@ -400,28 +400,73 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		return result
 	}
 
-	// Convert to ONUData
-	result.ONUs = make([]ONUData, len(onus))
-	for i, onu := range onus {
+	// Convert provisioned ONUs to ONUData
+	result.ONUs = make([]ONUData, 0, len(onus))
+	seenSerials := make(map[string]bool)
+
+	for _, onu := range onus {
 		status := "offline"
+		offlineReason := ""
 		if onu.IsOnline {
 			status = "online"
-		} else if onu.OperState == "los" {
-			status = "los"
-		} else if onu.OperState == "discovered" {
-			status = "discovered"
+		} else {
+			// Determine offline reason from OperState
+			switch onu.OperState {
+			case "los", "LOS":
+				status = "los"
+				offlineReason = "los" // Loss of Signal
+			case "dying_gasp", "DyingGasp":
+				status = "offline"
+				offlineReason = "dying_gasp"
+			case "low_power", "LowPower":
+				status = "offline"
+				offlineReason = "low_power"
+			case "disabled":
+				status = "offline"
+				offlineReason = "admin_disabled"
+			default:
+				if onu.OperState != "" {
+					offlineReason = onu.OperState
+				}
+			}
 		}
 
-		result.ONUs[i] = ONUData{
-			Serial:    onu.Serial,
-			PONPort:   onu.PONPort,
-			ONUID:     onu.ONUID,
-			Status:    status,
-			OperState: onu.OperState,
-			Distance:  onu.DistanceM,
-			RxPower:   onu.RxPowerDBm,
-			TxPower:   onu.TxPowerDBm,
-			Model:     onu.Model,
+		seenSerials[onu.Serial] = true
+		result.ONUs = append(result.ONUs, ONUData{
+			Serial:        onu.Serial,
+			PONPort:       onu.PONPort,
+			ONUID:         onu.ONUID,
+			Status:        status,
+			OperState:     onu.OperState,
+			OfflineReason: offlineReason,
+			Distance:      onu.DistanceM,
+			RxPower:       onu.RxPowerDBm,
+			TxPower:       onu.TxPowerDBm,
+			Model:         onu.Model,
+		})
+	}
+
+	// Also get discovered (unprovisioned) ONUs
+	discoveries, err := driverV2.DiscoverONUs(ctx, nil)
+	if err != nil {
+		// Log but don't fail - discovery is optional
+		fmt.Printf("[olt-poller] Warning: failed to discover ONUs for %s: %v\n", state.Config.Name, err)
+	} else {
+		for _, disc := range discoveries {
+			// Skip if we already have this ONU in the provisioned list
+			if seenSerials[disc.Serial] {
+				continue
+			}
+			result.ONUs = append(result.ONUs, ONUData{
+				Serial:        disc.Serial,
+				PONPort:       disc.PONPort,
+				Status:        "discovered",
+				OperState:     "discovered",
+				OfflineReason: "unauthorized", // Not yet provisioned
+				Distance:      disc.DistanceM,
+				RxPower:       disc.RxPowerDBm,
+				Model:         disc.Model,
+			})
 		}
 	}
 
