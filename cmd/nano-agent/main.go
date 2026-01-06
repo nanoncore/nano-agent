@@ -1543,11 +1543,9 @@ func discoverONUsCLI(ctx context.Context, olt OLTConfig, state *agent.State) err
 		onus = append(onus, onu)
 	}
 
-	// Send ONUs to API
-	if len(onus) > 0 {
-		if err := sendONUsToAPI(ctx, olt.ID, onus, state); err != nil {
-			return fmt.Errorf("failed to send ONUs to API: %w", err)
-		}
+	// Always send to API (even with 0 ONUs) to update equipment status
+	if err := sendONUsToAPI(ctx, olt.ID, onus, state); err != nil {
+		return fmt.Errorf("failed to send ONUs to API: %w", err)
 	}
 
 	return nil
@@ -1620,12 +1618,10 @@ func discoverONUsSNMP(ctx context.Context, olt OLTConfig, state *agent.State) {
 	fmt.Printf("[%s] OLT %s: Discovered %d ONUs\n",
 		time.Now().Format("15:04:05"), olt.Name, len(onus))
 
-	// Send ONUs to API
-	if len(onus) > 0 {
-		if err := sendONUsToAPI(ctx, olt.ID, onus, state); err != nil {
-			fmt.Printf("[%s] OLT %s: Failed to send ONUs to API: %v\n",
-				time.Now().Format("15:04:05"), olt.Name, err)
-		}
+	// Always send to API (even with 0 ONUs) to update equipment status
+	if err := sendONUsToAPI(ctx, olt.ID, onus, state); err != nil {
+		fmt.Printf("[%s] OLT %s: Failed to send ONUs to API: %v\n",
+			time.Now().Format("15:04:05"), olt.Name, err)
 	}
 }
 
