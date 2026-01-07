@@ -1502,46 +1502,105 @@ func discoverONUsCLI(ctx context.Context, olt OLTConfig, state *agent.State) err
 	fmt.Printf("[%s] OLT %s: CLI connected successfully\n",
 		time.Now().Format("15:04:05"), olt.Name)
 
-	// The driver is wrapped in types.Driver interface, but we need DiscoverONUs from DriverV2
-	// Use a minimal interface to check for the method we need
+	// Define interfaces for the DriverV2 methods we need
+	type onuLister interface {
+		GetONUList(context.Context, *types.ONUFilter) ([]types.ONUInfo, error)
+	}
 	type onuDiscoverer interface {
 		DiscoverONUs(context.Context, []string) ([]types.ONUDiscovery, error)
 	}
 
-	discoverer, ok := driver.(onuDiscoverer)
-	if !ok {
-		fmt.Printf("[%s] OLT %s: Driver does not support DiscoverONUs (type=%T)\n",
-			time.Now().Format("15:04:05"), olt.Name, driver)
-		return fmt.Errorf("driver does not support ONU discovery")
-	}
+	// Track ONUs by serial to avoid duplicates
+	onuBySerial := make(map[string]snmp.ONUInfo)
 
-	// Discover ONUs
-	discoveryCtx, discoveryCancel := context.WithTimeout(ctx, 60*time.Second)
-	defer discoveryCancel()
+	// 1. Get provisioned ONUs (already configured on the OLT)
+	if lister, ok := driver.(onuLister); ok {
+		listCtx, listCancel := context.WithTimeout(ctx, 60*time.Second)
+		defer listCancel()
 
-	fmt.Printf("[%s] OLT %s: Discovering ONUs...\n",
-		time.Now().Format("15:04:05"), olt.Name)
-	discoveries, err := discoverer.DiscoverONUs(discoveryCtx, olt.Discovery.PonPorts)
-	if err != nil {
-		return fmt.Errorf("discovery failed: %w", err)
-	}
+		fmt.Printf("[%s] OLT %s: Getting provisioned ONUs...\n",
+			time.Now().Format("15:04:05"), olt.Name)
+		provisionedONUs, err := lister.GetONUList(listCtx, nil)
+		if err != nil {
+			fmt.Printf("[%s] OLT %s: GetONUList failed: %v\n",
+				time.Now().Format("15:04:05"), olt.Name, err)
+		} else {
+			fmt.Printf("[%s] OLT %s: Found %d provisioned ONUs\n",
+				time.Now().Format("15:04:05"), olt.Name, len(provisionedONUs))
+			for _, p := range provisionedONUs {
+				// Map OperState/IsOnline to Status
+				status := "offline"
+				if p.IsOnline {
+					status = "online"
+				} else if p.OperState != "" {
+					status = p.OperState
+				}
 
-	fmt.Printf("[%s] OLT %s: Discovered %d ONUs\n",
-		time.Now().Format("15:04:05"), olt.Name, len(discoveries))
+				info := snmp.ONUInfo{
+					SerialNumber: p.Serial,
+					MAC:          p.MAC,
+					Model:        p.Model,
+					OnuID:        p.PONPort,
+					Status:       status,
+					OperState:    p.OperState,
+					Distance:     p.DistanceM,
+					RxPower:      p.RxPowerDBm,
+					TxPower:      p.TxPowerDBm,
+				}
 
-	// Convert to ONUInfo format for API
-	var onus []snmp.ONUInfo
-	for _, d := range discoveries {
-		onu := snmp.ONUInfo{
-			SerialNumber: d.Serial,
-			MAC:          d.MAC,
-			Model:        d.Model,
-			OnuID:        d.PONPort, // Use PONPort as OnuID for now
-			Status:       "discovered",
-			Distance:     d.DistanceM,
+				// Safely extract metadata fields if present
+				if p.Metadata != nil {
+					if fw, ok := p.Metadata["firmware_version"].(string); ok {
+						info.SoftwareVersion = fw
+					}
+					if reason, ok := p.Metadata["offline_reason"].(string); ok {
+						info.OfflineReason = reason
+					}
+				}
+
+				onuBySerial[p.Serial] = info
+			}
 		}
+	}
+
+	// 2. Discover unprovisioned ONUs (waiting to be configured)
+	if discoverer, ok := driver.(onuDiscoverer); ok {
+		discoveryCtx, discoveryCancel := context.WithTimeout(ctx, 60*time.Second)
+		defer discoveryCancel()
+
+		fmt.Printf("[%s] OLT %s: Discovering unprovisioned ONUs...\n",
+			time.Now().Format("15:04:05"), olt.Name)
+		discoveries, err := discoverer.DiscoverONUs(discoveryCtx, olt.Discovery.PonPorts)
+		if err != nil {
+			fmt.Printf("[%s] OLT %s: DiscoverONUs failed: %v\n",
+				time.Now().Format("15:04:05"), olt.Name, err)
+		} else {
+			fmt.Printf("[%s] OLT %s: Found %d unprovisioned ONUs\n",
+				time.Now().Format("15:04:05"), olt.Name, len(discoveries))
+			for _, d := range discoveries {
+				// Only add if not already in provisioned list
+				if _, exists := onuBySerial[d.Serial]; !exists {
+					onuBySerial[d.Serial] = snmp.ONUInfo{
+						SerialNumber: d.Serial,
+						MAC:          d.MAC,
+						Model:        d.Model,
+						OnuID:        d.PONPort,
+						Status:       "discovered",
+						Distance:     int(d.DistanceM),
+					}
+				}
+			}
+		}
+	}
+
+	// Convert map to slice
+	var onus []snmp.ONUInfo
+	for _, onu := range onuBySerial {
 		onus = append(onus, onu)
 	}
+
+	fmt.Printf("[%s] OLT %s: Total ONUs: %d (provisioned + discovered)\n",
+		time.Now().Format("15:04:05"), olt.Name, len(onus))
 
 	// Always send to API (even with 0 ONUs) to update equipment status
 	if err := sendONUsToAPI(ctx, olt.ID, onus, state); err != nil {
@@ -1670,6 +1729,8 @@ func sendONUsToAPI(ctx context.Context, oltID string, onus []snmp.ONUInfo, state
 		SerialNumber    string   `json:"serialNumber"`
 		PonPort         string   `json:"ponPort"`
 		Status          string   `json:"status"`
+		OperState       *string  `json:"operState,omitempty"`
+		OfflineReason   *string  `json:"offlineReason,omitempty"`
 		Distance        *int     `json:"distance,omitempty"`
 		RxPower         *float64 `json:"rxPower,omitempty"`
 		TxPower         *float64 `json:"txPower,omitempty"`
@@ -1685,8 +1746,20 @@ func sendONUsToAPI(ctx context.Context, oltID string, onus []snmp.ONUInfo, state
 			PonPort:      onu.OnuID,
 			Status:       onu.Status,
 		}
+		if onu.OperState != "" {
+			data.OperState = &onu.OperState
+		}
+		if onu.OfflineReason != "" {
+			data.OfflineReason = &onu.OfflineReason
+		}
 		if onu.Distance > 0 {
 			data.Distance = &onu.Distance
+		}
+		if onu.RxPower != 0 {
+			data.RxPower = &onu.RxPower
+		}
+		if onu.TxPower != 0 {
+			data.TxPower = &onu.TxPower
 		}
 		if onu.Model != "" {
 			data.Model = &onu.Model
