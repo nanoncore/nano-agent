@@ -624,8 +624,8 @@ func (p *Poller) handleResult(result *PollResult) {
 
 	p.log("Poll succeeded for %s: %d ONUs in %s", oltName, len(result.ONUs), result.Duration)
 
-	// Push ONUs to control plane
-	if p.pusher != nil && len(result.ONUs) > 0 {
+	// Push ONUs to control plane (always push, even with 0 ONUs, to update equipment status)
+	if p.pusher != nil {
 		resp, err := p.pusher.PushONUs(result.OLTID, result.ONUs)
 		if err != nil {
 			p.log("Failed to push ONUs for %s: %v", oltName, err)

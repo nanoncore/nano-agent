@@ -1607,6 +1607,33 @@ func discoverONUsCLI(ctx context.Context, olt OLTConfig, state *agent.State) err
 		return fmt.Errorf("failed to send ONUs to API: %w", err)
 	}
 
+	// 3. Collect OLT telemetry (CPU, Memory, Temperature)
+	type oltStatusGetter interface {
+		GetOLTStatus(context.Context) (*types.OLTStatus, error)
+	}
+	if statusGetter, ok := driver.(oltStatusGetter); ok {
+		statusCtx, statusCancel := context.WithTimeout(ctx, 30*time.Second)
+		defer statusCancel()
+
+		fmt.Printf("[%s] OLT %s: Collecting telemetry...\n",
+			time.Now().Format("15:04:05"), olt.Name)
+		oltStatus, err := statusGetter.GetOLTStatus(statusCtx)
+		if err != nil {
+			fmt.Printf("[%s] OLT %s: GetOLTStatus failed: %v\n",
+				time.Now().Format("15:04:05"), olt.Name, err)
+		} else {
+			fmt.Printf("[%s] OLT %s: Telemetry - CPU: %.1f%%, Memory: %.1f%%, Temp: %.1f°C\n",
+				time.Now().Format("15:04:05"), olt.Name,
+				oltStatus.CPUPercent, oltStatus.MemoryPercent, oltStatus.Temperature)
+
+			// Send telemetry to API
+			if err := sendOLTTelemetryToAPI(ctx, olt.ID, oltStatus, state); err != nil {
+				fmt.Printf("[%s] OLT %s: Failed to send telemetry: %v\n",
+					time.Now().Format("15:04:05"), olt.Name, err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1793,5 +1820,57 @@ func sendONUsToAPI(ctx context.Context, oltID string, onus []snmp.ONUInfo, state
 
 	fmt.Printf("[%s] Successfully sent %d ONUs to API\n",
 		time.Now().Format("15:04:05"), len(onus))
+	return nil
+}
+
+// sendOLTTelemetryToAPI sends OLT telemetry (CPU, Memory, Temperature) to the control plane API
+func sendOLTTelemetryToAPI(ctx context.Context, oltID string, status *types.OLTStatus, state *agent.State) error {
+	// Load config to get API client
+	cfg, err := agent.LoadConfig(configDir)
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Use agent API key authentication
+	var client *agent.Client
+	if cfg.AgentAPIKey != "" {
+		client = agent.NewClientWithAPIKey(cfg.APIURL, cfg.AgentAPIKey)
+	} else {
+		// Fallback to mTLS if no API key
+		mtlsClient, err := agent.NewClientWithMTLS(cfg.APIURL, cfg.CertFile, cfg.KeyFile, cfg.CAFile)
+		if err != nil {
+			return fmt.Errorf("failed to create client: %w", err)
+		}
+		client = mtlsClient
+	}
+
+	// Build telemetry payload
+	payload := map[string]interface{}{
+		"cpuPercent":    status.CPUPercent,
+		"memoryPercent": status.MemoryPercent,
+		"temperature":   status.Temperature,
+		"uptime":        status.UptimeSeconds,
+		"isReachable":   status.IsReachable,
+		"isHealthy":     status.IsHealthy,
+		"firmware":      status.Firmware,
+		"serialNumber":  status.SerialNumber,
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	// Make API request to telemetry endpoint
+	resp, err := client.PostJSON(ctx, "/api/v1/equipment/"+oltID+"/telemetry", payloadJSON)
+	if err != nil {
+		return fmt.Errorf("API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
 	return nil
 }
