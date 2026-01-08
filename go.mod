@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/google/goexpect v0.0.0-20210430020637-ab937bf7fd6f
 	github.com/gosnmp/gosnmp v1.38.0
-	github.com/nanoncore/nano-southbound v0.3.1
+	github.com/nanoncore/nano-southbound v0.3.2-0.20260108060854-13779dbefc70
 	github.com/spf13/cobra v1.8.1
 	golang.org/x/crypto v0.43.0
 )
