@@ -49,23 +49,77 @@ func (a *ClientAdapter) PushONUs(oltID string, onus []ONUData) (*PushONUsRespons
 	}, nil
 }
 
+// PushTelemetry implements the TelemetryPusher interface.
+func (a *ClientAdapter) PushTelemetry(oltID string, telemetry *TelemetryData) (*PushTelemetryResponse, error) {
+	// Convert poller.TelemetryData to agent.TelemetryData
+	agentTelemetry := &agent.TelemetryData{
+		CPUPercent:    telemetry.CPUPercent,
+		MemoryPercent: telemetry.MemoryPercent,
+		Temperature:   telemetry.Temperature,
+		Uptime:        telemetry.Uptime,
+		IsReachable:   telemetry.IsReachable,
+		IsHealthy:     telemetry.IsHealthy,
+		Firmware:      telemetry.Firmware,
+		SerialNumber:  telemetry.SerialNumber,
+	}
+
+	// Call the agent client
+	resp, err := a.client.PushTelemetry(oltID, agentTelemetry)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert response
+	return &PushTelemetryResponse{
+		Success: resp.Success,
+		Message: resp.Message,
+	}, nil
+}
+
+// PushMetrics implements the MetricsPusher interface.
+func (a *ClientAdapter) PushMetrics(batch *MetricsBatch) (*PushMetricsResponse, error) {
+	if batch == nil || len(batch.Metrics) == 0 {
+		return &PushMetricsResponse{Success: true, Count: 0}, nil
+	}
+
+	// Convert poller.MetricsBatch to agent.MetricsBatch
+	agentBatch := &agent.MetricsBatch{
+		Metrics: make([]agent.MetricSample, len(batch.Metrics)),
+	}
+	for i, m := range batch.Metrics {
+		agentBatch.Metrics[i] = agent.MetricSample{
+			Name:      m.Name,
+			Value:     m.Value,
+			Timestamp: m.Timestamp,
+			Labels:    m.Labels,
+		}
+	}
+
+	// Call the agent client
+	resp, err := a.client.PushMetrics(agentBatch)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert response
+	return &PushMetricsResponse{
+		Success: resp.Success,
+		Count:   resp.Count,
+		Message: resp.Message,
+	}, nil
+}
+
 // ConvertOLTConfigs converts agent.OLTConfig to poller.OLTConfig.
-// Supports both legacy format (snmp/ssh) and new multi-protocol format.
 func ConvertOLTConfigs(agentConfigs []agent.OLTConfig) []OLTConfig {
 	configs := make([]OLTConfig, len(agentConfigs))
 	for i, cfg := range agentConfigs {
-		// Normalize legacy format before conversion
-		cfg.Protocols.NormalizeLegacyFormat()
-
-		pollerConfig := OLTConfig{
+		configs[i] = OLTConfig{
 			ID:      cfg.ID,
 			Name:    cfg.Name,
 			Vendor:  cfg.Vendor,
 			Model:   cfg.Model,
 			Address: cfg.Address,
 			Protocols: OLTProtocols{
-				Primary: cfg.Protocols.Primary,
-				// Legacy SNMP/SSH
 				SNMP: SNMPConfig{
 					Enabled:   cfg.Protocols.SNMP.Enabled,
 					Port:      cfg.Protocols.SNMP.Port,
@@ -91,49 +145,6 @@ func ConvertOLTConfigs(agentConfigs []agent.OLTConfig) []OLTConfig {
 				PONPorts: cfg.Discovery.PONPorts,
 			},
 		}
-
-		// Convert new multi-protocol configs
-		if cfg.Protocols.CLI != nil {
-			pollerConfig.Protocols.CLI = &CLIConfig{
-				Enabled:           cfg.Protocols.CLI.Enabled,
-				Port:              cfg.Protocols.CLI.Port,
-				Username:          cfg.Protocols.CLI.Username,
-				Password:          cfg.Protocols.CLI.Password,
-				CredentialsSecret: cfg.Protocols.CLI.CredentialsSecret,
-			}
-		}
-		if cfg.Protocols.NETCONF != nil {
-			pollerConfig.Protocols.NETCONF = &NETCONFConfig{
-				Enabled:           cfg.Protocols.NETCONF.Enabled,
-				Port:              cfg.Protocols.NETCONF.Port,
-				Username:          cfg.Protocols.NETCONF.Username,
-				Password:          cfg.Protocols.NETCONF.Password,
-				CredentialsSecret: cfg.Protocols.NETCONF.CredentialsSecret,
-			}
-		}
-		if cfg.Protocols.GNMI != nil {
-			pollerConfig.Protocols.GNMI = &GNMIConfig{
-				Enabled:           cfg.Protocols.GNMI.Enabled,
-				Port:              cfg.Protocols.GNMI.Port,
-				Username:          cfg.Protocols.GNMI.Username,
-				Password:          cfg.Protocols.GNMI.Password,
-				CredentialsSecret: cfg.Protocols.GNMI.CredentialsSecret,
-				TLSEnabled:        cfg.Protocols.GNMI.TLSEnabled,
-			}
-		}
-		if cfg.Protocols.REST != nil {
-			pollerConfig.Protocols.REST = &RESTConfig{
-				Enabled:           cfg.Protocols.REST.Enabled,
-				Port:              cfg.Protocols.REST.Port,
-				Username:          cfg.Protocols.REST.Username,
-				Password:          cfg.Protocols.REST.Password,
-				CredentialsSecret: cfg.Protocols.REST.CredentialsSecret,
-				TLSEnabled:        cfg.Protocols.REST.TLSEnabled,
-				BasePath:          cfg.Protocols.REST.BasePath,
-			}
-		}
-
-		configs[i] = pollerConfig
 	}
 	return configs
 }

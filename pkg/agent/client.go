@@ -28,7 +28,6 @@ type EnrollRequest struct {
 	NodeID string            `json:"node_id"`
 	Token  string            `json:"token"`
 	Labels map[string]string `json:"labels,omitempty"`
-	Roles  []string          `json:"roles,omitempty"` // ["olt", "bng"] - equipment types to manage
 }
 
 // EnrollResponse is returned from the control plane after enrollment.
@@ -401,7 +400,6 @@ type EnrollRequestV2 struct {
 	NodeID         string            `json:"node_id"`
 	Token          string            `json:"token,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
-	Roles          []string          `json:"roles,omitempty"` // ["olt", "bng"] - equipment types to manage
 	OrganizationID string            `json:"organization_id"`
 	NetworkID      string            `json:"network_id"`
 	NetworkSlug    string            `json:"network_slug"` // K8s namespace
@@ -643,106 +641,34 @@ func (c *Client) UpdateToken(newToken string) {
 	c.token = newToken
 }
 
-// PostJSON makes a POST request with JSON payload and returns the response.
-// This is a generic helper for API calls that don't need special response parsing.
-func (c *Client) PostJSON(ctx interface{}, path string, jsonData []byte) (*http.Response, error) {
-	httpReq, err := http.NewRequest("POST", c.baseURL+path, bytes.NewReader(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	httpReq.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.token)
-	}
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-
-	c.checkResponseHeaders(resp)
-	return resp, nil
-}
-
 // OLTConfig represents an OLT configuration from the control plane.
 type OLTConfig struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	Vendor    string             `json:"vendor"`
-	Model     string             `json:"model"`
-	Address   string             `json:"address"`
-	Protocols OLTProtocols       `json:"protocols"`
-	Polling   OLTPollingConfig   `json:"polling"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Vendor    string            `json:"vendor"`
+	Model     string            `json:"model"`
+	Address   string            `json:"address"`
+	Protocols OLTProtocols      `json:"protocols"`
+	Polling   OLTPollingConfig  `json:"polling"`
 	Discovery OLTDiscoveryConfig `json:"discovery"`
 }
 
 // OLTProtocols contains protocol configurations for OLT access.
-// Supports both legacy format (snmp/ssh fields) and new multi-protocol format (primary + protocol map).
 type OLTProtocols struct {
-	// New multi-protocol format
-	Primary string `json:"primary,omitempty"` // Primary protocol: cli, snmp, netconf, gnmi, rest
-
-	// Protocol-specific configurations (new format)
-	CLI     *OLTCLIConfig     `json:"cli,omitempty"`
-	NETCONF *OLTNETCONFConfig `json:"netconf,omitempty"`
-	GNMI    *OLTGNMIConfig    `json:"gnmi,omitempty"`
-	REST    *OLTRESTConfig    `json:"rest,omitempty"`
-
-	// Legacy format (still supported)
-	SNMP OLTSNMPConfig `json:"snmp"`
-	SSH  OLTSSHConfig  `json:"ssh"`
+	SNMP SNMPConfig `json:"snmp"`
+	SSH  SSHConfig  `json:"ssh"`
 }
 
-// OLTCLIConfig contains CLI/SSH configuration for OLT access.
-type OLTCLIConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Port              int    `json:"port"`
-	Username          string `json:"username,omitempty"`
-	Password          string `json:"password,omitempty"`
-	CredentialsSecret string `json:"credentialsSecret,omitempty"`
-}
-
-// OLTNETCONFConfig contains NETCONF configuration.
-type OLTNETCONFConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Port              int    `json:"port"`
-	Username          string `json:"username,omitempty"`
-	Password          string `json:"password,omitempty"`
-	CredentialsSecret string `json:"credentialsSecret,omitempty"`
-}
-
-// OLTGNMIConfig contains gNMI configuration.
-type OLTGNMIConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Port              int    `json:"port"`
-	Username          string `json:"username,omitempty"`
-	Password          string `json:"password,omitempty"`
-	CredentialsSecret string `json:"credentialsSecret,omitempty"`
-	TLSEnabled        bool   `json:"tlsEnabled,omitempty"`
-}
-
-// OLTRESTConfig contains REST API configuration.
-type OLTRESTConfig struct {
-	Enabled           bool   `json:"enabled"`
-	Port              int    `json:"port"`
-	Username          string `json:"username,omitempty"`
-	Password          string `json:"password,omitempty"`
-	CredentialsSecret string `json:"credentialsSecret,omitempty"`
-	TLSEnabled        bool   `json:"tlsEnabled,omitempty"`
-	BasePath          string `json:"basePath,omitempty"`
-}
-
-// OLTSNMPConfig contains SNMP configuration.
-type OLTSNMPConfig struct {
+// SNMPConfig contains SNMP configuration.
+type SNMPConfig struct {
 	Enabled   bool   `json:"enabled"`
 	Port      int    `json:"port"`
 	Community string `json:"community"`
 	Version   string `json:"version"`
 }
 
-// OLTSSHConfig contains SSH configuration.
-type OLTSSHConfig struct {
+// SSHConfig contains SSH configuration.
+type SSHConfig struct {
 	Enabled  bool   `json:"enabled"`
 	Port     int    `json:"port"`
 	Username string `json:"username"`
@@ -752,173 +678,33 @@ type OLTSSHConfig struct {
 // OLTPollingConfig contains polling configuration.
 type OLTPollingConfig struct {
 	Enabled  bool     `json:"enabled"`
-	Interval int      `json:"interval"`
+	Interval int      `json:"interval"` // seconds
 	Metrics  []string `json:"metrics"`
 }
 
 // OLTDiscoveryConfig contains discovery configuration.
 type OLTDiscoveryConfig struct {
 	Enabled  bool     `json:"enabled"`
-	Interval int      `json:"interval"`
+	Interval int      `json:"interval"` // seconds
 	Protocol string   `json:"protocol"`
 	PONPorts []string `json:"ponPorts"`
 }
 
-// GetPrimaryProtocol returns the primary protocol for this OLT.
-// Falls back to "cli" if not specified, or checks legacy SSH/SNMP config.
-func (p *OLTProtocols) GetPrimaryProtocol() string {
-	if p.Primary != "" {
-		return p.Primary
-	}
-	// Check new format CLI first
-	if p.CLI != nil && p.CLI.Enabled {
-		return "cli"
-	}
-	// Legacy: check SSH
-	if p.SSH.Enabled {
-		return "cli"
-	}
-	// Check SNMP
-	if p.SNMP.Enabled {
-		return "snmp"
-	}
-	// Check other protocols
-	if p.NETCONF != nil && p.NETCONF.Enabled {
-		return "netconf"
-	}
-	if p.GNMI != nil && p.GNMI.Enabled {
-		return "gnmi"
-	}
-	if p.REST != nil && p.REST.Enabled {
-		return "rest"
-	}
-	// Default to cli
-	return "cli"
-}
-
-// HasProtocol checks if a specific protocol is enabled.
-func (p *OLTProtocols) HasProtocol(protocol string) bool {
-	switch protocol {
-	case "cli", "ssh":
-		// Check new format CLI
-		if p.CLI != nil && p.CLI.Enabled {
-			return true
-		}
-		// Legacy: check SSH
-		return p.SSH.Enabled
-	case "snmp":
-		return p.SNMP.Enabled
-	case "netconf":
-		return p.NETCONF != nil && p.NETCONF.Enabled
-	case "gnmi":
-		return p.GNMI != nil && p.GNMI.Enabled
-	case "rest":
-		return p.REST != nil && p.REST.Enabled
-	default:
-		return false
-	}
-}
-
-// GetEnabledProtocols returns a list of all enabled protocol names.
-func (p *OLTProtocols) GetEnabledProtocols() []string {
-	var enabled []string
-	if p.CLI != nil && p.CLI.Enabled {
-		enabled = append(enabled, "cli")
-	} else if p.SSH.Enabled {
-		// Legacy SSH maps to CLI
-		enabled = append(enabled, "cli")
-	}
-	if p.SNMP.Enabled {
-		enabled = append(enabled, "snmp")
-	}
-	if p.NETCONF != nil && p.NETCONF.Enabled {
-		enabled = append(enabled, "netconf")
-	}
-	if p.GNMI != nil && p.GNMI.Enabled {
-		enabled = append(enabled, "gnmi")
-	}
-	if p.REST != nil && p.REST.Enabled {
-		enabled = append(enabled, "rest")
-	}
-	return enabled
-}
-
-// NormalizeLegacyFormat converts legacy SSH config to new CLI format if needed.
-// This ensures backward compatibility while using the new protocol model.
-func (p *OLTProtocols) NormalizeLegacyFormat() {
-	// If SSH is enabled but CLI is not set, convert SSH to CLI
-	if p.SSH.Enabled && p.CLI == nil {
-		p.CLI = &OLTCLIConfig{
-			Enabled:  true,
-			Port:     p.SSH.Port,
-			Username: p.SSH.Username,
-			Password: p.SSH.Password,
-		}
-	}
-	// Set default primary if not specified
-	if p.Primary == "" {
-		p.Primary = p.GetPrimaryProtocol()
-	}
-}
-
-// VendorCapability defines the required protocols for a vendor.
-type VendorCapability struct {
-	ConfigMethod    string // Required protocol for configuration (cli, netconf, etc.)
-	TelemetryMethod string // Required protocol for telemetry (snmp, gnmi, etc.)
-}
-
-// VendorCapabilityMatrix maps vendor names to their capability requirements.
-// This is used to validate that required protocols are enabled for each vendor.
-var VendorCapabilityMatrix = map[string]VendorCapability{
-	"huawei": {ConfigMethod: "cli", TelemetryMethod: "snmp"},
-	"zte":    {ConfigMethod: "cli", TelemetryMethod: "snmp"},
-	"vsol":   {ConfigMethod: "cli", TelemetryMethod: "snmp"},
-	"cdata":  {ConfigMethod: "cli", TelemetryMethod: "snmp"},
-	"nokia":  {ConfigMethod: "netconf", TelemetryMethod: "gnmi"},
-	"adtran": {ConfigMethod: "netconf", TelemetryMethod: "snmp"},
-}
-
-// ValidateProtocolsForVendor validates that required protocols are enabled for the vendor.
-// Returns an error if a required protocol is not enabled.
-func (cfg *OLTConfig) ValidateProtocolsForVendor() error {
-	vendor := cfg.Vendor
-	if vendor == "" {
-		return nil // No vendor specified, skip validation
-	}
-
-	cap, ok := VendorCapabilityMatrix[vendor]
-	if !ok {
-		// Unknown vendor, allow any protocol configuration
-		return nil
-	}
-
-	// Validate ConfigMethod is enabled
-	if cap.ConfigMethod != "" && !cfg.Protocols.HasProtocol(cap.ConfigMethod) {
-		return fmt.Errorf("vendor %s requires config protocol %s but it is not enabled", vendor, cap.ConfigMethod)
-	}
-
-	// Validate TelemetryMethod is enabled
-	if cap.TelemetryMethod != "" && !cfg.Protocols.HasProtocol(cap.TelemetryMethod) {
-		return fmt.Errorf("vendor %s requires telemetry protocol %s but it is not enabled", vendor, cap.TelemetryMethod)
-	}
-
-	return nil
-}
-
-// AgentConfigResponse is the response from the agent config endpoint.
+// AgentConfigResponse represents the full configuration response from the control plane.
 type AgentConfigResponse struct {
 	NodeID  string      `json:"nodeId"`
 	Version int         `json:"version"`
 	OLTs    []OLTConfig `json:"olts"`
 }
 
-// GetOLTConfig retrieves OLT configuration from the control plane.
+// GetOLTConfig retrieves the typed OLT configuration from the control plane.
 func (c *Client) GetOLTConfig(nodeID string) (*AgentConfigResponse, error) {
 	httpReq, err := http.NewRequest("GET", c.baseURL+"/api/v1/nodes/"+nodeID+"/config", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Use agent API key (na_) for per-agent rate limiting
 	if c.token != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.token)
 	}
@@ -929,6 +715,7 @@ func (c *Client) GetOLTConfig(nodeID string) (*AgentConfigResponse, error) {
 	}
 	defer resp.Body.Close()
 
+	// Check for server signals (e.g., key rotation required)
 	c.checkResponseHeaders(resp)
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -954,7 +741,6 @@ type ONUData struct {
 	PONPort         string  `json:"ponPort"`
 	ONUID           int     `json:"onuId,omitempty"`
 	Status          string  `json:"status"`
-	OperState       string  `json:"operState,omitempty"`
 	Distance        int     `json:"distance,omitempty"`
 	RxPower         float64 `json:"rxPower,omitempty"`
 	TxPower         float64 `json:"txPower,omitempty"`
@@ -962,7 +748,7 @@ type ONUData struct {
 	SoftwareVersion string  `json:"softwareVersion,omitempty"`
 }
 
-// PushONUsRequest is the request body for pushing ONUs.
+// PushONUsRequest is the request body for pushing ONUs to the control plane.
 type PushONUsRequest struct {
 	ONUs []ONUData `json:"onus"`
 }
@@ -977,15 +763,148 @@ type PushONUsResponse struct {
 	OnlineCount int    `json:"onlineCount"`
 }
 
-// PushONUs pushes ONU data to the control plane.
+// PushONUs sends discovered ONUs to the control plane.
+// This calls POST /api/v1/equipment/{oltId}/onus
 func (c *Client) PushONUs(oltID string, onus []ONUData) (*PushONUsResponse, error) {
-	reqBody := PushONUsRequest{ONUs: onus}
-	body, err := json.Marshal(reqBody)
+	req := &PushONUsRequest{ONUs: onus}
+	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/equipment/"+oltID+"/onus", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	// Use agent API key (na_) for per-agent rate limiting
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check for server signals
+	c.checkResponseHeaders(resp)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("push ONUs failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var pushResp PushONUsResponse
+	if err := json.Unmarshal(respBody, &pushResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &pushResp, nil
+}
+
+// TelemetryData represents telemetry data to be pushed to the control plane.
+type TelemetryData struct {
+	CPUPercent    float64 `json:"cpuPercent,omitempty"`
+	MemoryPercent float64 `json:"memoryPercent,omitempty"`
+	Temperature   float64 `json:"temperature,omitempty"`
+	Uptime        int64   `json:"uptime,omitempty"`
+	IsReachable   bool    `json:"isReachable"`
+	IsHealthy     bool    `json:"isHealthy"`
+	Firmware      string  `json:"firmware,omitempty"`
+	SerialNumber  string  `json:"serialNumber,omitempty"`
+}
+
+// PushTelemetryResponse is the response from pushing telemetry.
+type PushTelemetryResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+}
+
+// PushTelemetry sends OLT telemetry data to the control plane.
+// This calls POST /api/v1/equipment/{oltId}/telemetry
+func (c *Client) PushTelemetry(oltID string, telemetry *TelemetryData) (*PushTelemetryResponse, error) {
+	body, err := json.Marshal(telemetry)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/equipment/"+oltID+"/telemetry", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	// Use agent API key (na_) for per-agent rate limiting
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check for server signals
+	c.checkResponseHeaders(resp)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, fmt.Errorf("push telemetry failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var pushResp PushTelemetryResponse
+	if err := json.Unmarshal(respBody, &pushResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &pushResp, nil
+}
+
+// MetricSample represents a single metric data point for time-series storage.
+type MetricSample struct {
+	Name      string            `json:"name"`
+	Value     float64           `json:"value"`
+	Timestamp int64             `json:"timestamp"` // Unix milliseconds
+	Labels    map[string]string `json:"labels"`
+}
+
+// MetricsBatch is a batch of metrics to push to the control plane.
+type MetricsBatch struct {
+	Metrics []MetricSample `json:"metrics"`
+}
+
+// PushMetricsResponse is the response from pushing metrics.
+type PushMetricsResponse struct {
+	Success bool   `json:"success"`
+	Count   int    `json:"count"`
+	Message string `json:"message,omitempty"`
+}
+
+// PushMetrics sends a batch of metrics to the control plane for time-series storage.
+// This calls POST /api/v1/agent/metrics
+func (c *Client) PushMetrics(batch *MetricsBatch) (*PushMetricsResponse, error) {
+	if batch == nil || len(batch.Metrics) == 0 {
+		return &PushMetricsResponse{Success: true, Count: 0}, nil
+	}
+
+	body, err := json.Marshal(batch)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/agent/metrics", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -1001,20 +920,19 @@ func (c *Client) PushONUs(oltID string, onus []ONUData) (*PushONUsResponse, erro
 	}
 	defer resp.Body.Close()
 
-	c.checkResponseHeaders(resp)
-
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("push ONUs failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return nil, fmt.Errorf("push metrics failed (HTTP %d): %s", resp.StatusCode, string(respBody))
 	}
 
-	var pushResp PushONUsResponse
+	var pushResp PushMetricsResponse
 	if err := json.Unmarshal(respBody, &pushResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
+		// If response is not JSON, assume success
+		return &PushMetricsResponse{Success: true, Count: len(batch.Metrics)}, nil
 	}
 
 	return &pushResp, nil

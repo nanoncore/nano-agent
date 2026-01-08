@@ -8,13 +8,23 @@ import (
 	"sync"
 	"time"
 
-	southbound "github.com/nanoncore/nano-southbound"
+	"github.com/nanoncore/nano-southbound"
 	"github.com/nanoncore/nano-southbound/types"
 )
 
 // ONUPusher is the interface for pushing ONUs to the control plane.
 type ONUPusher interface {
 	PushONUs(oltID string, onus []ONUData) (*PushONUsResponse, error)
+}
+
+// TelemetryPusher is the interface for pushing OLT telemetry to the control plane.
+type TelemetryPusher interface {
+	PushTelemetry(oltID string, telemetry *TelemetryData) (*PushTelemetryResponse, error)
+}
+
+// MetricsPusher is the interface for pushing metrics to the control plane for time-series storage.
+type MetricsPusher interface {
+	PushMetrics(batch *MetricsBatch) (*PushMetricsResponse, error)
 }
 
 // Poller manages OLT polling with a worker pool.
@@ -32,7 +42,9 @@ type Poller struct {
 	running   bool
 
 	// Dependencies
-	pusher ONUPusher
+	pusher          ONUPusher
+	telemetryPusher TelemetryPusher
+	metricsPusher   MetricsPusher
 
 	// Channels
 	jobChan    chan *OLTState
@@ -74,7 +86,7 @@ func DefaultConfig() *Config {
 }
 
 // New creates a new OLT poller.
-func New(pusher ONUPusher, cfg *Config) *Poller {
+func New(pusher ONUPusher, telemetryPusher TelemetryPusher, metricsPusher MetricsPusher, cfg *Config) *Poller {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
@@ -95,13 +107,15 @@ func New(pusher ONUPusher, cfg *Config) *Poller {
 	}
 
 	return &Poller{
-		workerCount:    cfg.WorkerCount,
-		checkInterval:  cfg.CheckInterval,
-		maxBackoff:     cfg.MaxBackoff,
-		connectTimeout: cfg.ConnectTimeout,
-		oltStates:      make(map[string]*OLTState),
-		pusher:         pusher,
-		logPrefix:      cfg.LogPrefix,
+		workerCount:     cfg.WorkerCount,
+		checkInterval:   cfg.CheckInterval,
+		maxBackoff:      cfg.MaxBackoff,
+		connectTimeout:  cfg.ConnectTimeout,
+		oltStates:       make(map[string]*OLTState),
+		pusher:          pusher,
+		telemetryPusher: telemetryPusher,
+		metricsPusher:   metricsPusher,
+		logPrefix:       cfg.LogPrefix,
 	}
 }
 
@@ -343,27 +357,18 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 	vendor := types.Vendor(strings.ToLower(state.Config.Vendor))
 	protocol := p.determineProtocol(state.Config)
 
-	// Get protocol-specific configuration
-	port, username, password := p.getProtocolCredentials(state.Config, protocol)
-
 	config := &types.EquipmentConfig{
 		Name:          state.Config.ID,
 		Vendor:        vendor,
 		Address:       state.Config.Address,
-		Port:          port,
+		Port:          state.Config.Protocols.SSH.Port,
 		Protocol:      protocol,
-		Username:      username,
-		Password:      password,
+		Username:      state.Config.Protocols.SSH.Username,
+		Password:      state.Config.Protocols.SSH.Password,
 		TLSEnabled:    false,
 		TLSSkipVerify: true,
 		Timeout:       p.connectTimeout,
 		Metadata:      make(map[string]string),
-	}
-
-	// Add SNMP-specific config to metadata
-	if protocol == types.ProtocolSNMP {
-		config.Metadata["snmp_community"] = state.Config.Protocols.SNMP.Community
-		config.Metadata["snmp_version"] = state.Config.Protocols.SNMP.Version
 	}
 
 	driver, err := southbound.NewDriver(vendor, protocol, config)
@@ -382,7 +387,7 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		result.Duration = time.Since(start)
 		return result
 	}
-	defer driver.Disconnect(ctx)
+	defer func() { _ = driver.Disconnect(ctx) }()
 
 	// Check if driver supports DriverV2
 	driverV2, ok := driver.(types.DriverV2)
@@ -392,7 +397,7 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		return result
 	}
 
-	// Get provisioned ONU list
+	// Get ONU list
 	onus, err := driverV2.GetONUList(ctx, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get ONU list: %w", err)
@@ -400,73 +405,45 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		return result
 	}
 
-	// Convert provisioned ONUs to ONUData
-	result.ONUs = make([]ONUData, 0, len(onus))
-	seenSerials := make(map[string]bool)
-
-	for _, onu := range onus {
+	// Convert to ONUData
+	result.ONUs = make([]ONUData, len(onus))
+	for i, onu := range onus {
 		status := "offline"
-		offlineReason := ""
 		if onu.IsOnline {
 			status = "online"
-		} else {
-			// Determine offline reason from OperState
-			switch onu.OperState {
-			case "los", "LOS":
-				status = "los"
-				offlineReason = "los" // Loss of Signal
-			case "dying_gasp", "DyingGasp":
-				status = "offline"
-				offlineReason = "dying_gasp"
-			case "low_power", "LowPower":
-				status = "offline"
-				offlineReason = "low_power"
-			case "disabled":
-				status = "offline"
-				offlineReason = "admin_disabled"
-			default:
-				if onu.OperState != "" {
-					offlineReason = onu.OperState
-				}
-			}
+		} else if onu.OperState == "los" {
+			status = "los"
+		} else if onu.OperState == "discovered" {
+			status = "discovered"
 		}
 
-		seenSerials[onu.Serial] = true
-		result.ONUs = append(result.ONUs, ONUData{
-			Serial:        onu.Serial,
-			PONPort:       onu.PONPort,
-			ONUID:         onu.ONUID,
-			Status:        status,
-			OperState:     onu.OperState,
-			OfflineReason: offlineReason,
-			Distance:      onu.DistanceM,
-			RxPower:       onu.RxPowerDBm,
-			TxPower:       onu.TxPowerDBm,
-			Model:         onu.Model,
-		})
+		result.ONUs[i] = ONUData{
+			Serial:   onu.Serial,
+			PONPort:  onu.PONPort,
+			ONUID:    onu.ONUID,
+			Status:   status,
+			Distance: onu.DistanceM,
+			RxPower:  onu.RxPowerDBm,
+			TxPower:  onu.TxPowerDBm,
+			Model:    onu.Model,
+		}
 	}
 
-	// Also get discovered (unprovisioned) ONUs
-	discoveries, err := driverV2.DiscoverONUs(ctx, nil)
+	// Get OLT status for telemetry (CPU, Memory, Temperature)
+	oltStatus, err := driverV2.GetOLTStatus(ctx)
 	if err != nil {
-		// Log but don't fail - discovery is optional
-		fmt.Printf("[olt-poller] Warning: failed to discover ONUs for %s: %v\n", state.Config.Name, err)
-	} else {
-		for _, disc := range discoveries {
-			// Skip if we already have this ONU in the provisioned list
-			if seenSerials[disc.Serial] {
-				continue
-			}
-			result.ONUs = append(result.ONUs, ONUData{
-				Serial:        disc.Serial,
-				PONPort:       disc.PONPort,
-				Status:        "discovered",
-				OperState:     "discovered",
-				OfflineReason: "unauthorized", // Not yet provisioned
-				Distance:      disc.DistanceM,
-				RxPower:       disc.RxPowerDBm,
-				Model:         disc.Model,
-			})
+		// Log but don't fail - ONU data is still valid
+		p.log("Warning: failed to get OLT status for %s: %v", state.Config.Name, err)
+	} else if oltStatus != nil {
+		result.Telemetry = &TelemetryData{
+			CPUPercent:    oltStatus.CPUPercent,
+			MemoryPercent: oltStatus.MemoryPercent,
+			Temperature:   oltStatus.Temperature,
+			Uptime:        oltStatus.UptimeSeconds,
+			IsReachable:   oltStatus.IsReachable,
+			IsHealthy:     oltStatus.IsHealthy,
+			Firmware:      oltStatus.Firmware,
+			SerialNumber:  oltStatus.SerialNumber,
 		}
 	}
 
@@ -476,108 +453,16 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 
 // determineProtocol determines the best protocol to use for an OLT.
 func (p *Poller) determineProtocol(cfg OLTConfig) types.Protocol {
-	// Use Primary field if set
-	if cfg.Protocols.Primary != "" {
-		switch cfg.Protocols.Primary {
-		case "cli", "ssh":
-			return types.ProtocolCLI
-		case "snmp":
-			return types.ProtocolSNMP
-		case "netconf":
-			return types.ProtocolNETCONF
-		case "gnmi":
-			return types.ProtocolGNMI
-		case "rest":
-			return types.ProtocolREST
-		}
-	}
-
-	// Check new multi-protocol format
-	if cfg.Protocols.CLI != nil && cfg.Protocols.CLI.Enabled {
-		return types.ProtocolCLI
-	}
-	if cfg.Protocols.SNMP.Enabled {
-		return types.ProtocolSNMP
-	}
-
-	// Legacy: check SSH
+	// Prefer SSH/CLI if enabled
 	if cfg.Protocols.SSH.Enabled {
 		return types.ProtocolCLI
 	}
-
+	// Fall back to SNMP if enabled
+	if cfg.Protocols.SNMP.Enabled {
+		return types.ProtocolSNMP
+	}
 	// Default to CLI
 	return types.ProtocolCLI
-}
-
-// getProtocolCredentials returns the port, username, and password for the given protocol.
-func (p *Poller) getProtocolCredentials(cfg OLTConfig, protocol types.Protocol) (port int, username, password string) {
-	switch protocol {
-	case types.ProtocolSNMP:
-		port = cfg.Protocols.SNMP.Port
-		if port == 0 {
-			port = 161
-		}
-		// SNMP uses community string, not username/password
-		return port, "", ""
-
-	case types.ProtocolCLI:
-		// Check new CLI config first
-		if cfg.Protocols.CLI != nil && cfg.Protocols.CLI.Enabled {
-			port = cfg.Protocols.CLI.Port
-			username = cfg.Protocols.CLI.Username
-			password = cfg.Protocols.CLI.Password
-		} else {
-			// Fallback to legacy SSH config
-			port = cfg.Protocols.SSH.Port
-			username = cfg.Protocols.SSH.Username
-			password = cfg.Protocols.SSH.Password
-		}
-		if port == 0 {
-			port = 22
-		}
-		return port, username, password
-
-	case types.ProtocolNETCONF:
-		if cfg.Protocols.NETCONF != nil {
-			port = cfg.Protocols.NETCONF.Port
-			username = cfg.Protocols.NETCONF.Username
-			password = cfg.Protocols.NETCONF.Password
-		}
-		if port == 0 {
-			port = 830
-		}
-		return port, username, password
-
-	case types.ProtocolGNMI:
-		if cfg.Protocols.GNMI != nil {
-			port = cfg.Protocols.GNMI.Port
-			username = cfg.Protocols.GNMI.Username
-			password = cfg.Protocols.GNMI.Password
-		}
-		if port == 0 {
-			port = 6030
-		}
-		return port, username, password
-
-	case types.ProtocolREST:
-		if cfg.Protocols.REST != nil {
-			port = cfg.Protocols.REST.Port
-			username = cfg.Protocols.REST.Username
-			password = cfg.Protocols.REST.Password
-		}
-		if port == 0 {
-			port = 443
-		}
-		return port, username, password
-
-	default:
-		// Default to SSH/CLI
-		port = cfg.Protocols.SSH.Port
-		if port == 0 {
-			port = 22
-		}
-		return port, cfg.Protocols.SSH.Username, cfg.Protocols.SSH.Password
-	}
 }
 
 // processResults handles poll results from workers.
@@ -602,7 +487,14 @@ func (p *Poller) handleResult(result *PollResult) {
 		state.ErrorCount++
 
 		// Calculate backoff: min(2^errorCount * 10s, maxBackoff)
-		backoff := time.Duration(1<<uint(state.ErrorCount)) * 10 * time.Second
+		// Cap error count to prevent overflow (max 30 gives ~10 billion seconds)
+		var expCount uint = 1
+		if state.ErrorCount > 0 && state.ErrorCount <= 30 {
+			expCount = uint(state.ErrorCount) // #nosec G115 - bounds checked above
+		} else if state.ErrorCount > 30 {
+			expCount = 30
+		}
+		backoff := time.Duration(1<<expCount) * 10 * time.Second
 		if backoff > p.maxBackoff {
 			backoff = p.maxBackoff
 		}
@@ -624,14 +516,38 @@ func (p *Poller) handleResult(result *PollResult) {
 
 	p.log("Poll succeeded for %s: %d ONUs in %s", oltName, len(result.ONUs), result.Duration)
 
-	// Push ONUs to control plane (always push, even with 0 ONUs, to update equipment status)
-	if p.pusher != nil {
+	// Push ONUs to control plane
+	if p.pusher != nil && len(result.ONUs) > 0 {
 		resp, err := p.pusher.PushONUs(result.OLTID, result.ONUs)
 		if err != nil {
 			p.log("Failed to push ONUs for %s: %v", oltName, err)
 		} else if resp != nil {
 			p.log("Pushed %d ONUs for %s (created: %d, updated: %d, unchanged: %d)",
 				len(result.ONUs), oltName, resp.Created, resp.Updated, resp.Unchanged)
+		}
+	}
+
+	// Push telemetry to control plane
+	if p.telemetryPusher != nil && result.Telemetry != nil {
+		resp, err := p.telemetryPusher.PushTelemetry(result.OLTID, result.Telemetry)
+		if err != nil {
+			p.log("Failed to push telemetry for %s: %v", oltName, err)
+		} else if resp != nil && resp.Success {
+			p.log("Pushed telemetry for %s (CPU: %.1f%%, Mem: %.1f%%, Temp: %.1f°C)",
+				oltName, result.Telemetry.CPUPercent, result.Telemetry.MemoryPercent, result.Telemetry.Temperature)
+		}
+	}
+
+	// Push metrics to control plane for time-series storage
+	if p.metricsPusher != nil {
+		batch := p.buildMetricsBatch(result, oltName)
+		if len(batch.Metrics) > 0 {
+			resp, err := p.metricsPusher.PushMetrics(batch)
+			if err != nil {
+				p.log("Failed to push metrics for %s: %v", oltName, err)
+			} else if resp != nil && resp.Success {
+				p.log("Pushed %d metrics for %s", resp.Count, oltName)
+			}
 		}
 	}
 }
@@ -664,6 +580,74 @@ func (p *Poller) GetStats() map[string]interface{} {
 	stats["olts"] = oltStats
 
 	return stats
+}
+
+// buildMetricsBatch converts a poll result into a metrics batch for time-series storage.
+func (p *Poller) buildMetricsBatch(result *PollResult, oltName string) *MetricsBatch {
+	now := time.Now().UnixMilli()
+	metrics := make([]MetricSample, 0)
+
+	baseLabels := map[string]string{
+		"olt_id":   result.OLTID,
+		"olt_name": oltName,
+	}
+
+	// OLT telemetry metrics
+	if result.Telemetry != nil {
+		if result.Telemetry.CPUPercent > 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "olt_cpu_percent",
+				Value:     result.Telemetry.CPUPercent,
+				Timestamp: now,
+				Labels:    baseLabels,
+			})
+		}
+		if result.Telemetry.MemoryPercent > 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "olt_memory_percent",
+				Value:     result.Telemetry.MemoryPercent,
+				Timestamp: now,
+				Labels:    baseLabels,
+			})
+		}
+		if result.Telemetry.Temperature > 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "olt_temperature_celsius",
+				Value:     result.Telemetry.Temperature,
+				Timestamp: now,
+				Labels:    baseLabels,
+			})
+		}
+	}
+
+	// ONU power metrics
+	for _, onu := range result.ONUs {
+		onuLabels := map[string]string{
+			"olt_id":     result.OLTID,
+			"olt_name":   oltName,
+			"onu_serial": onu.Serial,
+			"pon_port":   onu.PONPort,
+		}
+
+		if onu.RxPower != 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_rx_power_dbm",
+				Value:     onu.RxPower,
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+		if onu.TxPower != 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_tx_power_dbm",
+				Value:     onu.TxPower,
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+	}
+
+	return &MetricsBatch{Metrics: metrics}
 }
 
 // log outputs a log message with the poller prefix.

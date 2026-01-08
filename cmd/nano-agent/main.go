@@ -3,39 +3,28 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/nanoncore/nano-agent/pkg/agent"
 	"github.com/nanoncore/nano-agent/pkg/agent/poller"
-	"github.com/nanoncore/nano-agent/pkg/snmp"
-	southbound "github.com/nanoncore/nano-southbound"
-	"github.com/nanoncore/nano-southbound/types"
 	"github.com/spf13/cobra"
 )
 
 var (
-	version   = "0.17.0"
+	version   = "0.1.0-dev"
 	commit    = "unknown"
 	buildDate = "unknown"
 )
 
 var (
 	configDir string
-)
-
-// Global state for OLT monitoring
-var (
-	oltMonitors   = make(map[string]context.CancelFunc)
-	oltMonitorsMu sync.Mutex
 )
 
 var rootCmd = &cobra.Command{
@@ -164,7 +153,6 @@ var (
 	enrollToken  string
 	enrollNodeID string
 	enrollLabels string
-	enrollRoles  string
 )
 
 // Run flags
@@ -184,16 +172,6 @@ var (
 // Default API URL
 const defaultAPIURL = "https://api.nanoncore.com"
 
-// getEnvDuration returns duration from env var, or default if not set/invalid
-func getEnvDuration(envVar string, defaultDuration time.Duration) time.Duration {
-	if val := os.Getenv(envVar); val != "" {
-		if d, err := time.ParseDuration(val); err == nil {
-			return d
-		}
-	}
-	return defaultDuration
-}
-
 func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", agent.DefaultConfigDir,
@@ -204,16 +182,14 @@ func init() {
 	enrollCmd.Flags().StringVar(&enrollToken, "token", "", "Enrollment token (uses API key auth if logged in)")
 	enrollCmd.Flags().StringVar(&enrollNodeID, "node-id", "", "Unique node identifier (prompted if not set)")
 	enrollCmd.Flags().StringVar(&enrollLabels, "labels", "", "Node labels (key=value,key2=value2)")
-	enrollCmd.Flags().StringVar(&enrollRoles, "roles", "", "Equipment roles this agent can manage (olt,bng)")
 
 	// Run flags
 	runCmd.Flags().DurationVar(&heartbeatInterval, "heartbeat-interval", 30*time.Second,
 		"Interval between heartbeats to control plane")
-	runCmd.Flags().DurationVar(&configSyncInterval, "config-sync-interval",
-		getEnvDuration("CONFIG_SYNC_INTERVAL", 5*time.Minute),
-		"Interval between configuration syncs (override with CONFIG_SYNC_INTERVAL env)")
+	runCmd.Flags().DurationVar(&configSyncInterval, "config-sync-interval", 5*time.Minute,
+		"Interval between configuration syncs")
 	runCmd.Flags().BoolVar(&enableOLTPolling, "enable-olt-polling", true,
-		"Enable OLT polling for ONU discovery (uses worker pool)")
+		"Enable OLT polling for ONU discovery")
 	runCmd.Flags().IntVar(&pollerWorkers, "poller-workers", 5,
 		"Number of concurrent OLT polling workers")
 
@@ -264,23 +240,12 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Parse roles (comma-separated list of equipment types: olt,bng)
-	var roles []string
-	if enrollRoles != "" {
-		for _, role := range strings.Split(enrollRoles, ",") {
-			role = strings.TrimSpace(strings.ToLower(role))
-			if role != "" {
-				roles = append(roles, role)
-			}
-		}
-	}
-
 	var (
-		apiURL      string
-		client      *agent.Client
-		selectedOrg *agent.Organization
-		selectedNet *agent.Network
-		nodeID      string
+		apiURL         string
+		client         *agent.Client
+		selectedOrg    *agent.Organization
+		selectedNet    *agent.Network
+		nodeID         string
 	)
 
 	if useInteractiveMode {
@@ -389,9 +354,6 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		if len(labels) > 0 {
 			fmt.Printf("  Labels:       %v\n", labels)
 		}
-		if len(roles) > 0 {
-			fmt.Printf("  Roles:        %v\n", roles)
-		}
 		fmt.Println()
 
 		// Send enrollment request (V2 with org/network)
@@ -399,7 +361,6 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		enrollReq := &agent.EnrollRequestV2{
 			NodeID:         nodeID,
 			Labels:         labels,
-			Roles:          roles,
 			OrganizationID: selectedOrg.ID,
 			NetworkID:      selectedNet.ID,
 			NetworkSlug:    selectedNet.Slug,
@@ -470,9 +431,6 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 		if len(labels) > 0 {
 			fmt.Printf("Labels:   %v\n", labels)
 		}
-		if len(roles) > 0 {
-			fmt.Printf("Roles:    %v\n", roles)
-		}
 		fmt.Println()
 
 		// Create client and check API health
@@ -490,7 +448,6 @@ func runEnroll(cmd *cobra.Command, args []string) error {
 			NodeID: nodeID,
 			Token:  enrollToken,
 			Labels: labels,
-			Roles:  roles,
 		}
 
 		resp, err := client.Enroll(enrollReq)
@@ -891,7 +848,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			LogPrefix:      "[olt-poller]",
 		}
 		adapter := poller.NewClientAdapter(client)
-		oltPoller = poller.New(adapter, pollerCfg)
+		oltPoller = poller.New(adapter, adapter, adapter, pollerCfg)
 		oltPoller.Start(ctx)
 		fmt.Printf("[%s] OLT poller started with %d workers\n", time.Now().Format("15:04:05"), pollerWorkers)
 	}
@@ -899,7 +856,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	// Send initial heartbeat
 	sendHeartbeat(client, cfg.NodeID, state, cfg)
 
-	// Perform initial config sync (populates the poller with OLTs)
+	// Perform initial config sync (this also populates the poller with OLTs)
 	syncConfigWithPoller(client, cfg.NodeID, state, cfg, oltPoller)
 
 	// Main loop
@@ -979,12 +936,7 @@ func sendHeartbeat(client *agent.Client, nodeID string, state *agent.State, cfg 
 		time.Now().Format("15:04:05"), vppStatus.Running, vppStatus.Interfaces)
 }
 
-// syncConfig retrieves and applies configuration from the control plane (legacy)
-func syncConfig(client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config) {
-	syncConfigWithPoller(client, nodeID, state, cfg, nil)
-}
-
-// syncConfigWithPoller retrieves configuration and updates the OLT poller
+// syncConfigWithPoller retrieves configuration from the control plane and updates the OLT poller
 func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config, oltPoller *poller.Poller) {
 	// Get typed OLT config
 	oltConfig, err := client.GetOLTConfig(nodeID)
@@ -997,32 +949,9 @@ func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.Stat
 	fmt.Printf("[%s] Config synced (version: %d, OLTs: %d)\n",
 		time.Now().Format("15:04:05"), oltConfig.Version, len(oltConfig.OLTs))
 
-	// Normalize and validate each OLT config
-	validOLTs := make([]agent.OLTConfig, 0, len(oltConfig.OLTs))
-	for i := range oltConfig.OLTs {
-		olt := &oltConfig.OLTs[i]
-
-		// Normalize legacy format to new multi-protocol format
-		olt.Protocols.NormalizeLegacyFormat()
-
-		// Log enabled protocols
-		enabledProtos := olt.Protocols.GetEnabledProtocols()
-		fmt.Printf("[%s]   OLT %s: vendor=%s, primary=%s, protocols=%v\n",
-			time.Now().Format("15:04:05"), olt.Name, olt.Vendor,
-			olt.Protocols.GetPrimaryProtocol(), enabledProtos)
-
-		// Validate vendor protocol requirements
-		if err := olt.ValidateProtocolsForVendor(); err != nil {
-			fmt.Printf("[%s]   Warning: %v\n", time.Now().Format("15:04:05"), err)
-			// Continue anyway - the OLT may still be partially operational
-		}
-
-		validOLTs = append(validOLTs, *olt)
-	}
-
-	// Update OLT poller with validated configs
-	if oltPoller != nil && len(validOLTs) > 0 {
-		pollerConfigs := poller.ConvertOLTConfigs(validOLTs)
+	// Update OLT poller with new config
+	if oltPoller != nil && len(oltConfig.OLTs) > 0 {
+		pollerConfigs := poller.ConvertOLTConfigs(oltConfig.OLTs)
 		oltPoller.UpdateOLTs(pollerConfigs)
 		fmt.Printf("[%s] Updated poller with %d OLTs\n", time.Now().Format("15:04:05"), len(pollerConfigs))
 	}
@@ -1030,16 +959,6 @@ func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.Stat
 	// Check if key rotation is needed (server signaled via header)
 	if client.NeedsKeyRotation() {
 		handleKeyRotation(client, cfg)
-	}
-
-	// Legacy: also apply OLT config via inline monitoring if poller is disabled
-	if oltPoller == nil {
-		config, err := client.GetConfig(nodeID)
-		if err == nil {
-			if olts, ok := config["olts"].([]interface{}); ok {
-				applyOLTConfig(olts, state)
-			}
-		}
 	}
 }
 
@@ -1097,7 +1016,7 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	if apiKey == "" {
 		// Prompt for API key
 		fmt.Printf("Get your API key from the Nanoncore dashboard:\n")
-		fmt.Printf("  https://app.nanoncore.com/settings?section=agents\n\n")
+		fmt.Printf("  %s/settings/api-keys\n\n", strings.TrimSuffix(loginAPIURL, "/api"))
 		fmt.Printf("Enter your API key: ")
 
 		reader := bufio.NewReader(os.Stdin)
@@ -1242,635 +1161,4 @@ func promptString(prompt string, defaultValue string) (string, error) {
 		return defaultValue, nil
 	}
 	return input, nil
-}
-
-// ==================== OLT Monitoring ====================
-
-// OLTConfig represents the configuration for an OLT device
-type OLTConfig struct {
-	ID        string                 `json:"id"`
-	Name      string                 `json:"name"`
-	Vendor    string                 `json:"vendor"`
-	Model     string                 `json:"model"`
-	Address   string                 `json:"address"`
-	Protocols map[string]interface{} `json:"protocols"`
-	Polling   struct {
-		Enabled  bool     `json:"enabled"`
-		Interval int      `json:"interval"`
-		Metrics  []string `json:"metrics"`
-	} `json:"polling"`
-	Discovery struct {
-		Enabled  bool     `json:"enabled"`
-		Interval int      `json:"interval"`
-		PonPorts []string `json:"ponPorts"`
-		Protocol string   `json:"protocol"`
-	} `json:"discovery"`
-}
-
-// parseOLTBasicFields extracts basic OLT fields from config map
-func parseOLTBasicFields(oltMap map[string]interface{}) (id, name, vendor, model, address string, protocols map[string]interface{}) {
-	id, _ = oltMap["id"].(string)
-	name, _ = oltMap["name"].(string)
-	vendor, _ = oltMap["vendor"].(string)
-	model, _ = oltMap["model"].(string)
-	address, _ = oltMap["address"].(string)
-	protocols, _ = oltMap["protocols"].(map[string]interface{})
-	return
-}
-
-// parsePollingConfig extracts polling configuration from config map
-func parsePollingConfig(oltMap map[string]interface{}) (enabled bool, interval int, metrics []string) {
-	polling, ok := oltMap["polling"].(map[string]interface{})
-	if !ok {
-		return false, 0, nil
-	}
-
-	enabled, _ = polling["enabled"].(bool)
-	if intervalFloat, ok := polling["interval"].(float64); ok {
-		interval = int(intervalFloat)
-	}
-
-	if metricsList, ok := polling["metrics"].([]interface{}); ok {
-		for _, m := range metricsList {
-			if metric, ok := m.(string); ok {
-				metrics = append(metrics, metric)
-			}
-		}
-	}
-	return
-}
-
-// parseDiscoveryConfig extracts discovery configuration from config map
-func parseDiscoveryConfig(oltMap map[string]interface{}) (enabled bool, interval int, protocol string, ponPorts []string) {
-	discovery, ok := oltMap["discovery"].(map[string]interface{})
-	if !ok {
-		return false, 0, "", nil
-	}
-
-	enabled, _ = discovery["enabled"].(bool)
-	if intervalFloat, ok := discovery["interval"].(float64); ok {
-		interval = int(intervalFloat)
-	}
-	protocol, _ = discovery["protocol"].(string)
-
-	if portsList, ok := discovery["ponPorts"].([]interface{}); ok {
-		for _, p := range portsList {
-			if port, ok := p.(string); ok {
-				ponPorts = append(ponPorts, port)
-			}
-		}
-	}
-	return
-}
-
-// logOLTConfig logs the OLT configuration details
-func logOLTConfig(olt OLTConfig) {
-	fmt.Printf("[%s] OLT: %s (%s) at %s\n",
-		time.Now().Format("15:04:05"), olt.Name, olt.Vendor, olt.Address)
-
-	if olt.Discovery.Enabled {
-		protocolStr := olt.Discovery.Protocol
-		if protocolStr == "" {
-			protocolStr = "default(snmp)"
-		}
-		fmt.Printf("[%s]   Discovery: enabled, interval=%ds, protocol=%s, ports=%v\n",
-			time.Now().Format("15:04:05"), olt.Discovery.Interval, protocolStr, olt.Discovery.PonPorts)
-	}
-
-	if olt.Polling.Enabled {
-		fmt.Printf("[%s]   Polling: enabled, interval=%ds, metrics=%v\n",
-			time.Now().Format("15:04:05"), olt.Polling.Interval, olt.Polling.Metrics)
-	}
-}
-
-// applyOLTConfig processes OLT configuration and starts/updates monitoring
-func applyOLTConfig(olts []interface{}, state *agent.State) {
-	fmt.Printf("[%s] Processing %d OLT(s)...\n", time.Now().Format("15:04:05"), len(olts))
-
-	for _, oltData := range olts {
-		oltMap, ok := oltData.(map[string]interface{})
-		if !ok {
-			fmt.Printf("[%s] Invalid OLT config format\n", time.Now().Format("15:04:05"))
-			continue
-		}
-
-		// Parse OLT configuration using helper functions
-		var olt OLTConfig
-		olt.ID, olt.Name, olt.Vendor, olt.Model, olt.Address, olt.Protocols = parseOLTBasicFields(oltMap)
-		olt.Polling.Enabled, olt.Polling.Interval, olt.Polling.Metrics = parsePollingConfig(oltMap)
-		olt.Discovery.Enabled, olt.Discovery.Interval, olt.Discovery.Protocol, olt.Discovery.PonPorts = parseDiscoveryConfig(oltMap)
-
-		// Log configuration
-		logOLTConfig(olt)
-
-		// Start/restart monitoring for this OLT
-		startOLTMonitoring(olt, state)
-	}
-}
-
-// startOLTMonitoring starts discovery and polling goroutines for an OLT
-func startOLTMonitoring(olt OLTConfig, state *agent.State) {
-	oltMonitorsMu.Lock()
-	defer oltMonitorsMu.Unlock()
-
-	// Stop existing monitoring if any
-	if cancel, exists := oltMonitors[olt.ID]; exists {
-		cancel()
-		delete(oltMonitors, olt.ID)
-	}
-
-	// Create context for this OLT's monitoring
-	ctx, cancel := context.WithCancel(context.Background())
-	oltMonitors[olt.ID] = cancel
-
-	// Start discovery loop if enabled
-	if olt.Discovery.Enabled && len(olt.Discovery.PonPorts) > 0 {
-		go runOLTDiscovery(ctx, olt, state)
-	}
-
-	// Start polling loop if enabled
-	if olt.Polling.Enabled && len(olt.Polling.Metrics) > 0 {
-		go runOLTPolling(ctx, olt, state)
-	}
-}
-
-// runOLTDiscovery runs periodic ONU discovery for an OLT
-func runOLTDiscovery(ctx context.Context, olt OLTConfig, state *agent.State) {
-	interval := time.Duration(olt.Discovery.Interval) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	// Run immediately on start
-	discoverONUs(ctx, olt, state)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			discoverONUs(ctx, olt, state)
-		}
-	}
-}
-
-// discoverONUs performs SNMP ONU discovery and sends results to API
-func discoverONUs(ctx context.Context, olt OLTConfig, state *agent.State) {
-	// Check protocol preference from discovery config
-	protocol := olt.Discovery.Protocol
-	if protocol == "" {
-		protocol = "snmp" // default to SNMP if not specified
-	}
-
-	// Try CLI/SSH discovery first if specified
-	if protocol == "cli" || protocol == "ssh" {
-		if err := discoverONUsCLI(ctx, olt, state); err != nil {
-			fmt.Printf("[%s] OLT %s: CLI discovery failed: %v\n",
-				time.Now().Format("15:04:05"), olt.Name, err)
-		}
-		return
-	}
-
-	// Fall back to SNMP discovery
-	discoverONUsSNMP(ctx, olt, state)
-}
-
-func discoverONUsCLI(ctx context.Context, olt OLTConfig, state *agent.State) error {
-	// Extract SSH configuration from protocols
-	sshConfig, ok := olt.Protocols["ssh"].(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("no SSH config found")
-	}
-
-	port, _ := sshConfig["port"].(float64)
-	if port == 0 {
-		port = 22
-	}
-	username, _ := sshConfig["username"].(string)
-	password, _ := sshConfig["password"].(string)
-
-	fmt.Printf("[%s] OLT %s: Starting CLI discovery (host=%s:%d, user=%s)\n",
-		time.Now().Format("15:04:05"), olt.Name, olt.Address, int(port), username)
-
-	// Map vendor string to Vendor type
-	var vendor southbound.Vendor
-	switch strings.ToLower(olt.Vendor) {
-	case "huawei":
-		vendor = southbound.VendorHuawei
-	case "zte":
-		vendor = southbound.VendorZTE
-	case "vsol":
-		vendor = southbound.VendorVSOL
-	case "cdata":
-		vendor = southbound.VendorCData
-	default:
-		return fmt.Errorf("unsupported vendor: %s", olt.Vendor)
-	}
-
-	equipConfig := &southbound.EquipmentConfig{
-		Name:          olt.Name,
-		Vendor:        vendor,
-		Address:       olt.Address,
-		Port:          int(port),
-		Username:      username,
-		Password:      password,
-		TLSEnabled:    false,
-		TLSSkipVerify: true,
-		Timeout:       60 * time.Second,
-		Metadata:      make(map[string]string),
-	}
-
-	// Create southbound driver
-	driver, err := southbound.NewDriver(vendor, southbound.ProtocolCLI, equipConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create driver: %w", err)
-	}
-
-	fmt.Printf("[%s] OLT %s: Created driver type=%T\n",
-		time.Now().Format("15:04:05"), olt.Name, driver)
-
-	// Connect to OLT
-	fmt.Printf("[%s] OLT %s: Connecting via CLI...\n",
-		time.Now().Format("15:04:05"), olt.Name)
-	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	if err := driver.Connect(connectCtx, equipConfig); err != nil {
-		return fmt.Errorf("connection failed: %w", err)
-	}
-	defer driver.Disconnect(ctx)
-
-	fmt.Printf("[%s] OLT %s: CLI connected successfully\n",
-		time.Now().Format("15:04:05"), olt.Name)
-
-	// Define interfaces for the DriverV2 methods we need
-	type onuLister interface {
-		GetONUList(context.Context, *types.ONUFilter) ([]types.ONUInfo, error)
-	}
-	type onuDiscoverer interface {
-		DiscoverONUs(context.Context, []string) ([]types.ONUDiscovery, error)
-	}
-
-	// Track ONUs by serial to avoid duplicates
-	onuBySerial := make(map[string]snmp.ONUInfo)
-
-	// 1. Get provisioned ONUs (already configured on the OLT)
-	if lister, ok := driver.(onuLister); ok {
-		listCtx, listCancel := context.WithTimeout(ctx, 60*time.Second)
-		defer listCancel()
-
-		fmt.Printf("[%s] OLT %s: Getting provisioned ONUs...\n",
-			time.Now().Format("15:04:05"), olt.Name)
-		provisionedONUs, err := lister.GetONUList(listCtx, nil)
-		if err != nil {
-			fmt.Printf("[%s] OLT %s: GetONUList failed: %v\n",
-				time.Now().Format("15:04:05"), olt.Name, err)
-		} else {
-			fmt.Printf("[%s] OLT %s: Found %d provisioned ONUs\n",
-				time.Now().Format("15:04:05"), olt.Name, len(provisionedONUs))
-			for _, p := range provisionedONUs {
-				// Map OperState/IsOnline to Status
-				status := "offline"
-				if p.IsOnline {
-					status = "online"
-				} else if p.OperState != "" {
-					status = p.OperState
-				}
-
-				info := snmp.ONUInfo{
-					SerialNumber: p.Serial,
-					MAC:          p.MAC,
-					Model:        p.Model,
-					OnuID:        p.PONPort,
-					Status:       status,
-					OperState:    p.OperState,
-					Distance:     p.DistanceM,
-					RxPower:      p.RxPowerDBm,
-					TxPower:      p.TxPowerDBm,
-				}
-
-				// Safely extract metadata fields if present
-				if p.Metadata != nil {
-					if fw, ok := p.Metadata["firmware_version"].(string); ok {
-						info.SoftwareVersion = fw
-					}
-					if reason, ok := p.Metadata["offline_reason"].(string); ok {
-						info.OfflineReason = reason
-					}
-				}
-
-				onuBySerial[p.Serial] = info
-			}
-		}
-	}
-
-	// 2. Discover unprovisioned ONUs (waiting to be configured)
-	if discoverer, ok := driver.(onuDiscoverer); ok {
-		discoveryCtx, discoveryCancel := context.WithTimeout(ctx, 60*time.Second)
-		defer discoveryCancel()
-
-		fmt.Printf("[%s] OLT %s: Discovering unprovisioned ONUs...\n",
-			time.Now().Format("15:04:05"), olt.Name)
-		discoveries, err := discoverer.DiscoverONUs(discoveryCtx, olt.Discovery.PonPorts)
-		if err != nil {
-			fmt.Printf("[%s] OLT %s: DiscoverONUs failed: %v\n",
-				time.Now().Format("15:04:05"), olt.Name, err)
-		} else {
-			fmt.Printf("[%s] OLT %s: Found %d unprovisioned ONUs\n",
-				time.Now().Format("15:04:05"), olt.Name, len(discoveries))
-			for _, d := range discoveries {
-				// Only add if not already in provisioned list
-				if _, exists := onuBySerial[d.Serial]; !exists {
-					onuBySerial[d.Serial] = snmp.ONUInfo{
-						SerialNumber: d.Serial,
-						MAC:          d.MAC,
-						Model:        d.Model,
-						OnuID:        d.PONPort,
-						Status:       "discovered",
-						Distance:     int(d.DistanceM),
-					}
-				}
-			}
-		}
-	}
-
-	// Convert map to slice
-	var onus []snmp.ONUInfo
-	for _, onu := range onuBySerial {
-		onus = append(onus, onu)
-	}
-
-	fmt.Printf("[%s] OLT %s: Total ONUs: %d (provisioned + discovered)\n",
-		time.Now().Format("15:04:05"), olt.Name, len(onus))
-
-	// Always send to API (even with 0 ONUs) to update equipment status
-	if err := sendONUsToAPI(ctx, olt.ID, onus, state); err != nil {
-		return fmt.Errorf("failed to send ONUs to API: %w", err)
-	}
-
-	// 3. Collect OLT telemetry (CPU, Memory, Temperature)
-	type oltStatusGetter interface {
-		GetOLTStatus(context.Context) (*types.OLTStatus, error)
-	}
-	if statusGetter, ok := driver.(oltStatusGetter); ok {
-		statusCtx, statusCancel := context.WithTimeout(ctx, 30*time.Second)
-		defer statusCancel()
-
-		fmt.Printf("[%s] OLT %s: Collecting telemetry...\n",
-			time.Now().Format("15:04:05"), olt.Name)
-		oltStatus, err := statusGetter.GetOLTStatus(statusCtx)
-		if err != nil {
-			fmt.Printf("[%s] OLT %s: GetOLTStatus failed: %v\n",
-				time.Now().Format("15:04:05"), olt.Name, err)
-		} else {
-			fmt.Printf("[%s] OLT %s: Telemetry - CPU: %.1f%%, Memory: %.1f%%, Temp: %.1f°C\n",
-				time.Now().Format("15:04:05"), olt.Name,
-				oltStatus.CPUPercent, oltStatus.MemoryPercent, oltStatus.Temperature)
-
-			// Send telemetry to API
-			if err := sendOLTTelemetryToAPI(ctx, olt.ID, oltStatus, state); err != nil {
-				fmt.Printf("[%s] OLT %s: Failed to send telemetry: %v\n",
-					time.Now().Format("15:04:05"), olt.Name, err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func discoverONUsSNMP(ctx context.Context, olt OLTConfig, state *agent.State) {
-	// Extract SNMP configuration from protocols
-	snmpConfig, ok := olt.Protocols["snmp"].(map[string]interface{})
-	if !ok {
-		fmt.Printf("[%s] OLT %s: No SNMP config\n", time.Now().Format("15:04:05"), olt.Name)
-		return
-	}
-
-	community, _ := snmpConfig["community"].(string)
-	if community == "" {
-		community = "public"
-	}
-
-	fmt.Printf("[%s] OLT %s: Starting SNMP discovery (host=%s, community=%s)\n",
-		time.Now().Format("15:04:05"), olt.Name, olt.Address, community)
-
-	// Create SNMP collector
-	deviceConfig := snmp.DeviceConfig{
-		Host:      olt.Address,
-		Port:      161,
-		Vendor:    snmp.Vendor(olt.Vendor),
-		Community: community,
-		Version:   snmp.SNMPv2c,
-		Timeout:   10 * time.Second,
-		Retries:   3,
-	}
-
-	var collector snmp.Collector
-	switch olt.Vendor {
-	case "huawei":
-		collector = snmp.NewHuaweiCollector(deviceConfig)
-	case "zte":
-		collector = snmp.NewZTECollector(deviceConfig)
-	default:
-		fmt.Printf("[%s] OLT %s: Unsupported vendor %s\n",
-			time.Now().Format("15:04:05"), olt.Name, olt.Vendor)
-		return
-	}
-
-	// Connect to OLT
-	fmt.Printf("[%s] OLT %s: Connecting to SNMP...\n",
-		time.Now().Format("15:04:05"), olt.Name)
-	if err := collector.Connect(); err != nil {
-		fmt.Printf("[%s] OLT %s: SNMP connect failed: %v\n",
-			time.Now().Format("15:04:05"), olt.Name, err)
-		return
-	}
-	defer collector.Close()
-	fmt.Printf("[%s] OLT %s: SNMP connected successfully\n",
-		time.Now().Format("15:04:05"), olt.Name)
-
-	// Collect ONUs
-	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	fmt.Printf("[%s] OLT %s: Collecting ONUs...\n",
-		time.Now().Format("15:04:05"), olt.Name)
-	onus, err := collector.CollectONUs(discoveryCtx)
-	if err != nil {
-		fmt.Printf("[%s] OLT %s: Discovery failed: %v\n",
-			time.Now().Format("15:04:05"), olt.Name, err)
-		return
-	}
-
-	fmt.Printf("[%s] OLT %s: Discovered %d ONUs\n",
-		time.Now().Format("15:04:05"), olt.Name, len(onus))
-
-	// Always send to API (even with 0 ONUs) to update equipment status
-	if err := sendONUsToAPI(ctx, olt.ID, onus, state); err != nil {
-		fmt.Printf("[%s] OLT %s: Failed to send ONUs to API: %v\n",
-			time.Now().Format("15:04:05"), olt.Name, err)
-	}
-}
-
-// runOLTPolling runs periodic metrics collection for an OLT
-func runOLTPolling(ctx context.Context, olt OLTConfig, state *agent.State) {
-	interval := time.Duration(olt.Polling.Interval) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			// TODO: Implement metrics collection
-			fmt.Printf("[%s] OLT %s: Metrics collection (placeholder)\n",
-				time.Now().Format("15:04:05"), olt.Name)
-		}
-	}
-}
-
-// sendONUsToAPI sends discovered ONUs to the control plane API
-func sendONUsToAPI(ctx context.Context, oltID string, onus []snmp.ONUInfo, state *agent.State) error {
-	// Load config to get API client
-	cfg, err := agent.LoadConfig(configDir)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Use agent API key authentication
-	var client *agent.Client
-	if cfg.AgentAPIKey != "" {
-		client = agent.NewClientWithAPIKey(cfg.APIURL, cfg.AgentAPIKey)
-	} else {
-		// Fallback to mTLS if no API key
-		mtlsClient, err := agent.NewClientWithMTLS(cfg.APIURL, cfg.CertFile, cfg.KeyFile, cfg.CAFile)
-		if err != nil {
-			return fmt.Errorf("failed to create client: %w", err)
-		}
-		client = mtlsClient
-	}
-
-	// Transform ONUs to API format
-	type ONUData struct {
-		OLTID           string   `json:"oltId"`
-		SerialNumber    string   `json:"serialNumber"`
-		PonPort         string   `json:"ponPort"`
-		Status          string   `json:"status"`
-		OperState       *string  `json:"operState,omitempty"`
-		OfflineReason   *string  `json:"offlineReason,omitempty"`
-		Distance        *int     `json:"distance,omitempty"`
-		RxPower         *float64 `json:"rxPower,omitempty"`
-		TxPower         *float64 `json:"txPower,omitempty"`
-		Model           *string  `json:"model,omitempty"`
-		SoftwareVersion *string  `json:"softwareVersion,omitempty"`
-	}
-
-	onuData := make([]ONUData, 0, len(onus))
-	for _, onu := range onus {
-		data := ONUData{
-			OLTID:        oltID,
-			SerialNumber: onu.SerialNumber,
-			PonPort:      onu.OnuID,
-			Status:       onu.Status,
-		}
-		if onu.OperState != "" {
-			data.OperState = &onu.OperState
-		}
-		if onu.OfflineReason != "" {
-			data.OfflineReason = &onu.OfflineReason
-		}
-		if onu.Distance > 0 {
-			data.Distance = &onu.Distance
-		}
-		if onu.RxPower != 0 {
-			data.RxPower = &onu.RxPower
-		}
-		if onu.TxPower != 0 {
-			data.TxPower = &onu.TxPower
-		}
-		if onu.Model != "" {
-			data.Model = &onu.Model
-		}
-		if onu.SoftwareVersion != "" {
-			data.SoftwareVersion = &onu.SoftwareVersion
-		}
-		onuData = append(onuData, data)
-	}
-
-	// Send to API endpoint
-	payload := map[string]interface{}{
-		"onus": onuData,
-	}
-
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	// Make API request
-	resp, err := client.PostJSON(ctx, "/api/v1/equipment/"+oltID+"/onus", payloadJSON)
-	if err != nil {
-		return fmt.Errorf("API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	fmt.Printf("[%s] Successfully sent %d ONUs to API\n",
-		time.Now().Format("15:04:05"), len(onus))
-	return nil
-}
-
-// sendOLTTelemetryToAPI sends OLT telemetry (CPU, Memory, Temperature) to the control plane API
-func sendOLTTelemetryToAPI(ctx context.Context, oltID string, status *types.OLTStatus, state *agent.State) error {
-	// Load config to get API client
-	cfg, err := agent.LoadConfig(configDir)
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
-
-	// Use agent API key authentication
-	var client *agent.Client
-	if cfg.AgentAPIKey != "" {
-		client = agent.NewClientWithAPIKey(cfg.APIURL, cfg.AgentAPIKey)
-	} else {
-		// Fallback to mTLS if no API key
-		mtlsClient, err := agent.NewClientWithMTLS(cfg.APIURL, cfg.CertFile, cfg.KeyFile, cfg.CAFile)
-		if err != nil {
-			return fmt.Errorf("failed to create client: %w", err)
-		}
-		client = mtlsClient
-	}
-
-	// Build telemetry payload
-	payload := map[string]interface{}{
-		"cpuPercent":    status.CPUPercent,
-		"memoryPercent": status.MemoryPercent,
-		"temperature":   status.Temperature,
-		"uptime":        status.UptimeSeconds,
-		"isReachable":   status.IsReachable,
-		"isHealthy":     status.IsHealthy,
-		"firmware":      status.Firmware,
-		"serialNumber":  status.SerialNumber,
-	}
-
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	// Make API request to telemetry endpoint
-	resp, err := client.PostJSON(ctx, "/api/v1/equipment/"+oltID+"/telemetry", payloadJSON)
-	if err != nil {
-		return fmt.Errorf("API request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("API returned status %d", resp.StatusCode)
-	}
-
-	return nil
 }
