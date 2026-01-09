@@ -40,6 +40,8 @@ github.com/nanoncore/nano-southbound v0.3.8-0.20260109144805-b892649a048e h1:9I5
 github.com/nanoncore/nano-southbound v0.3.8-0.20260109144805-b892649a048e/go.mod h1:j+YKPNowvyUqVOtizHKZgcnasEn63o+qkezcpqlsOm4=
 github.com/nanoncore/nano-southbound v0.3.8-0.20260109145521-275518322030 h1:doGm2GEMUNMTPfz+0DXLgprwASS547fOkYB6zwGYArw=
 github.com/nanoncore/nano-southbound v0.3.8-0.20260109145521-275518322030/go.mod h1:j+YKPNowvyUqVOtizHKZgcnasEn63o+qkezcpqlsOm4=
+github.com/nanoncore/nano-southbound v0.3.8-0.20260109151646-42a27d7f4488 h1:aNWO9eVj0S/bJX2dXCC0G7tuNR3eBaz9sB9BzC6MZo0=
+github.com/nanoncore/nano-southbound v0.3.8-0.20260109151646-42a27d7f4488/go.mod h1:j+YKPNowvyUqVOtizHKZgcnasEn63o+qkezcpqlsOm4=
 github.com/openconfig/gnmi v0.14.1 h1:qKMuFvhIRR2/xxCOsStPQ25aKpbMDdWr3kI+nP9bhMs=
 github.com/openconfig/gnmi v0.14.1/go.mod h1:whr6zVq9PCU8mV1D0K9v7Ajd3+swoN6Yam9n8OH3eT0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
