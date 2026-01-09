@@ -692,9 +692,55 @@ type OLTDiscoveryConfig struct {
 
 // AgentConfigResponse represents the full configuration response from the control plane.
 type AgentConfigResponse struct {
-	NodeID  string      `json:"nodeId"`
-	Version int         `json:"version"`
-	OLTs    []OLTConfig `json:"olts"`
+	NodeID        string         `json:"nodeId"`
+	Version       int            `json:"version"`
+	OLTs          []OLTConfig    `json:"olts"`
+	PendingProbes []PendingProbe `json:"pendingProbes,omitempty"`
+}
+
+// PendingProbe represents a probe request queued by the control plane.
+type PendingProbe struct {
+	ID       string `json:"id"`
+	OLTID    string `json:"oltId"`
+	Detailed bool   `json:"detailed"`
+}
+
+// AckProbeRequest is sent to acknowledge a completed probe.
+type AckProbeRequest struct {
+	ProbeID string `json:"probeId"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// AckProbe acknowledges a completed probe to the control plane.
+func (c *Client) AckProbe(nodeID string, req *AckProbeRequest) error {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/nodes/"+nodeID+"/probes/ack", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ack probe failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	return nil
 }
 
 // GetOLTConfig retrieves the typed OLT configuration from the control plane.

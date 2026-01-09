@@ -596,6 +596,35 @@ func (p *Poller) handleResult(result *PollResult) {
 	}
 }
 
+// TriggerDetailedPoll triggers an immediate detailed poll for a specific OLT.
+// Returns the poll result or an error if the OLT is not found.
+func (p *Poller) TriggerDetailedPoll(ctx context.Context, oltID string) (*PollResult, error) {
+	p.mu.RLock()
+	state, exists := p.oltStates[oltID]
+	p.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("OLT %s not found", oltID)
+	}
+
+	p.log("Manual probe triggered for %s", state.Config.Name)
+
+	// Force detailed poll by setting LastDetailedPoll to zero
+	p.mu.Lock()
+	state.LastDetailedPoll = time.Time{}
+	p.mu.Unlock()
+
+	// Run the poll synchronously
+	result := p.pollOLT(ctx, state)
+
+	// Process the result (push data)
+	if result.Error == nil {
+		p.handleResult(result)
+	}
+
+	return result, result.Error
+}
+
 // GetStats returns current polling statistics.
 func (p *Poller) GetStats() map[string]interface{} {
 	p.mu.RLock()

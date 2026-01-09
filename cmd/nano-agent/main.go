@@ -956,6 +956,36 @@ func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.Stat
 		fmt.Printf("[%s] Updated poller with %d OLTs\n", time.Now().Format("15:04:05"), len(pollerConfigs))
 	}
 
+	// Process pending probes
+	if oltPoller != nil && len(oltConfig.PendingProbes) > 0 {
+		fmt.Printf("[%s] Processing %d pending probes\n", time.Now().Format("15:04:05"), len(oltConfig.PendingProbes))
+		for _, probe := range oltConfig.PendingProbes {
+			go func(p agent.PendingProbe) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+
+				result, err := oltPoller.TriggerDetailedPoll(ctx, p.OLTID)
+
+				// Acknowledge probe completion
+				ackReq := &agent.AckProbeRequest{
+					ProbeID: p.ID,
+					Success: err == nil,
+				}
+				if err != nil {
+					ackReq.Error = err.Error()
+					fmt.Printf("[%s] Probe %s failed: %v\n", time.Now().Format("15:04:05"), p.ID, err)
+				} else {
+					fmt.Printf("[%s] Probe %s completed: %d ONUs in %s\n",
+						time.Now().Format("15:04:05"), p.ID, len(result.ONUs), result.Duration)
+				}
+
+				if ackErr := client.AckProbe(nodeID, ackReq); ackErr != nil {
+					fmt.Printf("[%s] Failed to ack probe %s: %v\n", time.Now().Format("15:04:05"), p.ID, ackErr)
+				}
+			}(probe)
+		}
+	}
+
 	// Check if key rotation is needed (server signaled via header)
 	if client.NeedsKeyRotation() {
 		handleKeyRotation(client, cfg)
