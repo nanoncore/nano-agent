@@ -41,9 +41,10 @@ type SSHConfig struct {
 
 // OLTPollingConfig contains polling configuration.
 type OLTPollingConfig struct {
-	Enabled  bool     `json:"enabled"`
-	Interval int      `json:"interval"` // seconds
-	Metrics  []string `json:"metrics"`
+	Enabled          bool     `json:"enabled"`
+	Interval         int      `json:"interval"`         // seconds (fast poll interval, default 60)
+	DetailedInterval int      `json:"detailedInterval"` // seconds (detailed poll interval, default 600 = 10 min)
+	Metrics          []string `json:"metrics"`
 }
 
 // OLTDiscoveryConfig contains discovery configuration.
@@ -145,20 +146,22 @@ type PushMetricsResponse struct {
 
 // OLTState tracks the state of an OLT for polling purposes.
 type OLTState struct {
-	Config       OLTConfig
-	LastPoll     time.Time
-	LastSuccess  time.Time
-	LastError    error
-	ErrorCount   int
-	BackoffUntil time.Time
+	Config           OLTConfig
+	LastPoll         time.Time
+	LastDetailedPoll time.Time // Last time detailed ONU data was fetched
+	LastSuccess      time.Time
+	LastError        error
+	ErrorCount       int
+	BackoffUntil     time.Time
 }
 
 // PollResult contains the result of polling an OLT.
 type PollResult struct {
-	OLTID     string
-	ONUs      []ONUData
-	Telemetry *TelemetryData
-	Error     error
-	Duration  time.Duration
-	Timestamp time.Time
+	OLTID        string
+	ONUs         []ONUData
+	Telemetry    *TelemetryData
+	Error        error
+	Duration     time.Duration
+	Timestamp    time.Time
+	DetailedPoll bool // Whether this poll included detailed ONU data (optical, traffic)
 }

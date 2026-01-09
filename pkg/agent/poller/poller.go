@@ -348,6 +348,13 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		Timestamp: start,
 	}
 
+	// Determine if we need a detailed poll
+	detailedInterval := time.Duration(state.Config.Polling.DetailedInterval) * time.Second
+	if detailedInterval <= 0 {
+		detailedInterval = 10 * time.Minute // Default: 10 minutes
+	}
+	needsDetailedPoll := time.Since(state.LastDetailedPoll) >= detailedInterval
+
 	// Update last poll time
 	p.mu.Lock()
 	state.LastPoll = start
@@ -397,12 +404,35 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		return result
 	}
 
-	// Get ONU list
+	// Get ONU list (fast poll - basic status)
 	onus, err := driverV2.GetONUList(ctx, nil)
 	if err != nil {
 		result.Error = fmt.Errorf("failed to get ONU list: %w", err)
 		result.Duration = time.Since(start)
 		return result
+	}
+
+	// If detailed poll is needed, fetch optical/traffic data for each ONU
+	if needsDetailedPoll && len(onus) > 0 {
+		p.log("Running detailed poll for %s (%d ONUs)", state.Config.Name, len(onus))
+		result.DetailedPoll = true
+
+		// Check if driver supports detailed polling
+		if detailProvider, ok := driverV2.(interface {
+			GetAllONUDetails(ctx context.Context, onus []types.ONUInfo) ([]types.ONUInfo, error)
+		}); ok {
+			detailedONUs, err := detailProvider.GetAllONUDetails(ctx, onus)
+			if err != nil {
+				p.log("Warning: detailed poll failed for %s: %v (using basic data)", state.Config.Name, err)
+			} else {
+				onus = detailedONUs
+			}
+		}
+
+		// Update last detailed poll time
+		p.mu.Lock()
+		state.LastDetailedPoll = start
+		p.mu.Unlock()
 	}
 
 	// Convert to ONUData
@@ -524,7 +554,11 @@ func (p *Poller) handleResult(result *PollResult) {
 	oltName := state.Config.Name
 	p.mu.Unlock()
 
-	p.log("Poll succeeded for %s: %d ONUs in %s", oltName, len(result.ONUs), result.Duration)
+	pollType := "fast"
+	if result.DetailedPoll {
+		pollType = "detailed"
+	}
+	p.log("Poll succeeded for %s: %d ONUs in %s (%s poll)", oltName, len(result.ONUs), result.Duration, pollType)
 
 	// Push ONUs to control plane
 	if p.pusher != nil && len(result.ONUs) > 0 {
@@ -576,11 +610,12 @@ func (p *Poller) GetStats() map[string]interface{} {
 	oltStats := make([]map[string]interface{}, 0, len(p.oltStates))
 	for id, state := range p.oltStates {
 		oltStat := map[string]interface{}{
-			"id":           id,
-			"name":         state.Config.Name,
-			"last_poll":    state.LastPoll,
-			"last_success": state.LastSuccess,
-			"error_count":  state.ErrorCount,
+			"id":                   id,
+			"name":                 state.Config.Name,
+			"last_poll":            state.LastPoll,
+			"last_detailed_poll":   state.LastDetailedPoll,
+			"last_success":         state.LastSuccess,
+			"error_count":          state.ErrorCount,
 		}
 		if state.LastError != nil {
 			oltStat["last_error"] = state.LastError.Error()
