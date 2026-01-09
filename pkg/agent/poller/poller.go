@@ -418,14 +418,24 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		}
 
 		result.ONUs[i] = ONUData{
-			Serial:   onu.Serial,
-			PONPort:  onu.PONPort,
-			ONUID:    onu.ONUID,
-			Status:   status,
-			Distance: onu.DistanceM,
-			RxPower:  onu.RxPowerDBm,
-			TxPower:  onu.TxPowerDBm,
-			Model:    onu.Model,
+			Serial:        onu.Serial,
+			PONPort:       onu.PONPort,
+			ONUID:         onu.ONUID,
+			Status:        status,
+			Distance:      onu.DistanceM,
+			RxPower:       onu.RxPowerDBm,
+			TxPower:       onu.TxPowerDBm,
+			Model:         onu.Model,
+			Temperature:   onu.Temperature,
+			Voltage:       onu.Voltage,
+			BiasCurrent:   onu.BiasCurrent,
+			BytesUp:       onu.BytesUp,
+			BytesDown:     onu.BytesDown,
+			PacketsUp:     onu.PacketsUp,
+			PacketsDown:   onu.PacketsDown,
+			InputRateBps:  onu.InputRateBps,
+			OutputRateBps: onu.OutputRateBps,
+			Vendor:        onu.Vendor,
 		}
 	}
 
@@ -620,7 +630,7 @@ func (p *Poller) buildMetricsBatch(result *PollResult, oltName string) *MetricsB
 		}
 	}
 
-	// ONU power metrics
+	// ONU metrics
 	for _, onu := range result.ONUs {
 		onuLabels := map[string]string{
 			"olt_id":     result.OLTID,
@@ -629,6 +639,7 @@ func (p *Poller) buildMetricsBatch(result *PollResult, oltName string) *MetricsB
 			"pon_port":   onu.PONPort,
 		}
 
+		// Optical power metrics
 		if onu.RxPower != 0 {
 			metrics = append(metrics, MetricSample{
 				Name:      "onu_rx_power_dbm",
@@ -641,6 +652,66 @@ func (p *Poller) buildMetricsBatch(result *PollResult, oltName string) *MetricsB
 			metrics = append(metrics, MetricSample{
 				Name:      "onu_tx_power_dbm",
 				Value:     onu.TxPower,
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+
+		// Thermal metrics (from detailed poll)
+		if onu.Temperature != 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_temperature_celsius",
+				Value:     onu.Temperature,
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+		if onu.Voltage != 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_voltage_volts",
+				Value:     onu.Voltage,
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+		if onu.BiasCurrent != 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_bias_current_ma",
+				Value:     onu.BiasCurrent,
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+
+		// Traffic metrics (as counters, from detailed poll)
+		if onu.BytesUp > 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_bytes_up_total",
+				Value:     float64(onu.BytesUp),
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+		if onu.BytesDown > 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_bytes_down_total",
+				Value:     float64(onu.BytesDown),
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+		if onu.PacketsUp > 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_packets_up_total",
+				Value:     float64(onu.PacketsUp),
+				Timestamp: now,
+				Labels:    onuLabels,
+			})
+		}
+		if onu.PacketsDown > 0 {
+			metrics = append(metrics, MetricSample{
+				Name:      "onu_packets_down_total",
+				Value:     float64(onu.PacketsDown),
 				Timestamp: now,
 				Labels:    onuLabels,
 			})
