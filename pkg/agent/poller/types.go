@@ -7,13 +7,13 @@ import (
 
 // OLTConfig represents an OLT configuration from the control plane.
 type OLTConfig struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Vendor    string            `json:"vendor"`
-	Model     string            `json:"model"`
-	Address   string            `json:"address"`
-	Protocols OLTProtocols      `json:"protocols"`
-	Polling   OLTPollingConfig  `json:"polling"`
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	Vendor    string             `json:"vendor"`
+	Model     string             `json:"model"`
+	Address   string             `json:"address"`
+	Protocols OLTProtocols       `json:"protocols"`
+	Polling   OLTPollingConfig   `json:"polling"`
 	Discovery OLTDiscoveryConfig `json:"discovery"`
 }
 

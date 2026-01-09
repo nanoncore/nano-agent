@@ -43,8 +43,8 @@ func TestVSOLCollector_ParseDownCause_Overrides(t *testing.T) {
 	collector := NewVSOLCollector(DeviceConfig{
 		Host: "test",
 		OfflineReasons: map[int]string{
-			1:  "fiber_cut",       // Override default "los"
-			99: "custom_reason",   // Add new code
+			1:  "fiber_cut",     // Override default "los"
+			99: "custom_reason", // Add new code
 		},
 	})
 

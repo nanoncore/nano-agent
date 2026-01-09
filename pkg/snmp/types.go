@@ -119,11 +119,11 @@ type ONUInfo struct {
 	Type            string    `json:"type,omitempty"`
 	Model           string    `json:"model,omitempty"`
 	Description     string    `json:"description,omitempty"`
-	Status          string    `json:"status"`   // online, offline
+	Status          string    `json:"status"`               // online, offline
 	OperState       string    `json:"oper_state,omitempty"` // operational state (los, dying_gasp, etc.)
-	Distance        int       `json:"distance"` // meters
-	RxPower         float64   `json:"rx_power,omitempty"` // dBm
-	TxPower         float64   `json:"tx_power,omitempty"` // dBm
+	Distance        int       `json:"distance"`             // meters
+	RxPower         float64   `json:"rx_power,omitempty"`   // dBm
+	TxPower         float64   `json:"tx_power,omitempty"`   // dBm
 	SoftwareVersion string    `json:"software_version,omitempty"`
 	HardwareVersion string    `json:"hardware_version,omitempty"`
 	AuthMode        string    `json:"auth_mode,omitempty"` // sn, mac, loid, hybrid

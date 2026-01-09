@@ -610,12 +610,12 @@ func (p *Poller) GetStats() map[string]interface{} {
 	oltStats := make([]map[string]interface{}, 0, len(p.oltStates))
 	for id, state := range p.oltStates {
 		oltStat := map[string]interface{}{
-			"id":                   id,
-			"name":                 state.Config.Name,
-			"last_poll":            state.LastPoll,
-			"last_detailed_poll":   state.LastDetailedPoll,
-			"last_success":         state.LastSuccess,
-			"error_count":          state.ErrorCount,
+			"id":                 id,
+			"name":               state.Config.Name,
+			"last_poll":          state.LastPoll,
+			"last_detailed_poll": state.LastDetailedPoll,
+			"last_success":       state.LastSuccess,
+			"error_count":        state.ErrorCount,
 		}
 		if state.LastError != nil {
 			oltStat["last_error"] = state.LastError.Error()
