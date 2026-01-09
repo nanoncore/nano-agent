@@ -792,6 +792,22 @@ type ONUData struct {
 	TxPower         float64 `json:"txPower,omitempty"`
 	Model           string  `json:"model,omitempty"`
 	SoftwareVersion string  `json:"softwareVersion,omitempty"`
+
+	// Thermal & Power (from detailed poll)
+	Temperature float64 `json:"temperature,omitempty"` // °C
+	Voltage     float64 `json:"voltage,omitempty"`     // V
+	BiasCurrent float64 `json:"biasCurrent,omitempty"` // mA
+
+	// Traffic Stats (from detailed poll)
+	BytesUp       uint64 `json:"bytesUp,omitempty"`
+	BytesDown     uint64 `json:"bytesDown,omitempty"`
+	PacketsUp     uint64 `json:"packetsUp,omitempty"`
+	PacketsDown   uint64 `json:"packetsDown,omitempty"`
+	InputRateBps  uint64 `json:"inputRateBps,omitempty"`
+	OutputRateBps uint64 `json:"outputRateBps,omitempty"`
+
+	// Vendor detection
+	Vendor string `json:"vendor,omitempty"`
 }
 
 // PushONUsRequest is the request body for pushing ONUs to the control plane.

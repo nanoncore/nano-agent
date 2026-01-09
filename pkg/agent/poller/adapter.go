@@ -29,6 +29,19 @@ func (a *ClientAdapter) PushONUs(oltID string, onus []ONUData) (*PushONUsRespons
 			TxPower:         onu.TxPower,
 			Model:           onu.Model,
 			SoftwareVersion: onu.SoftwareVersion,
+			// Thermal & Power (from detailed poll)
+			Temperature: onu.Temperature,
+			Voltage:     onu.Voltage,
+			BiasCurrent: onu.BiasCurrent,
+			// Traffic Stats (from detailed poll)
+			BytesUp:       onu.BytesUp,
+			BytesDown:     onu.BytesDown,
+			PacketsUp:     onu.PacketsUp,
+			PacketsDown:   onu.PacketsDown,
+			InputRateBps:  onu.InputRateBps,
+			OutputRateBps: onu.OutputRateBps,
+			// Vendor
+			Vendor: onu.Vendor,
 		}
 	}
 
