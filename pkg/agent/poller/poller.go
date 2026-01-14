@@ -364,18 +364,28 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 	vendor := types.Vendor(strings.ToLower(state.Config.Vendor))
 	protocol := p.determineProtocol(state.Config)
 
+	// Build config based on protocol
 	config := &types.EquipmentConfig{
 		Name:          state.Config.ID,
 		Vendor:        vendor,
 		Address:       state.Config.Address,
-		Port:          state.Config.Protocols.SSH.Port,
 		Protocol:      protocol,
-		Username:      state.Config.Protocols.SSH.Username,
-		Password:      state.Config.Protocols.SSH.Password,
 		TLSEnabled:    false,
 		TLSSkipVerify: true,
 		Timeout:       p.connectTimeout,
 		Metadata:      make(map[string]string),
+	}
+
+	// Set protocol-specific configuration
+	if protocol == types.ProtocolSNMP {
+		config.Port = state.Config.Protocols.SNMP.Port
+		// SNMP driver reads community and version from Metadata
+		config.Metadata["snmp_community"] = state.Config.Protocols.SNMP.Community
+		config.Metadata["snmp_version"] = state.Config.Protocols.SNMP.Version
+	} else {
+		config.Port = state.Config.Protocols.SSH.Port
+		config.Username = state.Config.Protocols.SSH.Username
+		config.Password = state.Config.Protocols.SSH.Password
 	}
 
 	driver, err := southbound.NewDriver(vendor, protocol, config)
@@ -491,16 +501,34 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 	return result
 }
 
-// determineProtocol determines the best protocol to use for an OLT.
+// determineProtocol determines the best protocol to use for polling an OLT.
+// Some vendors (Huawei, ZTE, VSOL, CData) require SNMP for ONU listing/telemetry.
 func (p *Poller) determineProtocol(cfg OLTConfig) types.Protocol {
-	// Prefer SSH/CLI if enabled
+	vendor := strings.ToLower(cfg.Vendor)
+
+	// Vendors that require SNMP for ONU listing/telemetry
+	snmpRequiredVendors := map[string]bool{
+		"huawei": true,
+		"zte":    true,
+		"vsol":   true,
+		"cdata":  true,
+	}
+
+	// For vendors that require SNMP for telemetry, prefer SNMP if enabled
+	if snmpRequiredVendors[vendor] && cfg.Protocols.SNMP.Enabled {
+		return types.ProtocolSNMP
+	}
+
+	// For other vendors, prefer SSH/CLI if enabled
 	if cfg.Protocols.SSH.Enabled {
 		return types.ProtocolCLI
 	}
+
 	// Fall back to SNMP if enabled
 	if cfg.Protocols.SNMP.Enabled {
 		return types.ProtocolSNMP
 	}
+
 	// Default to CLI
 	return types.ProtocolCLI
 }
