@@ -14,18 +14,37 @@ import (
 // HuaweiCLIDriver implements CLI operations for Huawei OLTs.
 type HuaweiCLIDriver struct {
 	*cli.BaseCLIDriver
+	model        string
+	capabilities *cli.VendorCapabilities
 }
 
 // NewHuaweiCLIDriver creates a new Huawei CLI driver.
 func NewHuaweiCLIDriver(config cli.CLIConfig) *HuaweiCLIDriver {
+	return NewHuaweiCLIDriverWithModel(config, "")
+}
+
+// NewHuaweiCLIDriverWithModel creates a new Huawei CLI driver with model-specific capabilities.
+func NewHuaweiCLIDriverWithModel(config cli.CLIConfig, model string) *HuaweiCLIDriver {
 	return &HuaweiCLIDriver{
 		BaseCLIDriver: cli.NewBaseCLIDriver(config),
+		model:         model,
+		capabilities:  cli.GetCapabilities("huawei", model),
 	}
 }
 
 // Vendor returns the vendor type.
 func (d *HuaweiCLIDriver) Vendor() string {
 	return "huawei"
+}
+
+// GetCapabilities returns the feature support matrix for this driver.
+func (d *HuaweiCLIDriver) GetCapabilities() *cli.VendorCapabilities {
+	return d.capabilities
+}
+
+// Model returns the OLT model.
+func (d *HuaweiCLIDriver) Model() string {
+	return d.model
 }
 
 // Connect establishes connection and enters config mode.

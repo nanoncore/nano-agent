@@ -29,6 +29,15 @@ type CLIDriver interface {
 	Vendor() string
 
 	// ==========================================================================
+	// Capability Detection
+	// ==========================================================================
+
+	// GetCapabilities returns the feature support matrix for this driver.
+	// This enables runtime capability detection for graceful degradation
+	// when features aren't supported by specific OLT vendors or models.
+	GetCapabilities() *VendorCapabilities
+
+	// ==========================================================================
 	// ONU Provisioning
 	// ==========================================================================
 
