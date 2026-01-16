@@ -14,18 +14,37 @@ import (
 // VSOLCLIDriver implements CLI operations for V-Sol OLTs.
 type VSOLCLIDriver struct {
 	*cli.BaseCLIDriver
+	model        string
+	capabilities *cli.VendorCapabilities
 }
 
 // NewVSOLCLIDriver creates a new V-Sol CLI driver.
 func NewVSOLCLIDriver(config cli.CLIConfig) *VSOLCLIDriver {
+	return NewVSOLCLIDriverWithModel(config, "")
+}
+
+// NewVSOLCLIDriverWithModel creates a new V-Sol CLI driver with model-specific capabilities.
+func NewVSOLCLIDriverWithModel(config cli.CLIConfig, model string) *VSOLCLIDriver {
 	return &VSOLCLIDriver{
 		BaseCLIDriver: cli.NewBaseCLIDriver(config),
+		model:         model,
+		capabilities:  cli.GetCapabilities("vsol", model),
 	}
 }
 
 // Vendor returns the vendor type.
 func (d *VSOLCLIDriver) Vendor() string {
 	return "vsol"
+}
+
+// GetCapabilities returns the feature support matrix for this driver.
+func (d *VSOLCLIDriver) GetCapabilities() *cli.VendorCapabilities {
+	return d.capabilities
+}
+
+// Model returns the OLT model.
+func (d *VSOLCLIDriver) Model() string {
+	return d.model
 }
 
 // Connect establishes connection and enters config mode.
