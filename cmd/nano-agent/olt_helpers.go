@@ -1,0 +1,477 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/nanoncore/nano-southbound/types"
+)
+
+// =============================================================================
+// Connection Helpers
+// =============================================================================
+
+// oltConnection holds a connected driver and its V2 interface
+type oltConnection struct {
+	driver   types.Driver
+	driverV2 types.DriverV2
+	ctx      context.Context
+	cancel   context.CancelFunc
+}
+
+// connectToOLT establishes a connection to the OLT and returns the driver
+func connectToOLT(timeoutSecs int) (*oltConnection, error) {
+	driver, err := createOLTDriver()
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSecs)*time.Second)
+
+	config := &types.EquipmentConfig{
+		Name:          "cli-session",
+		Vendor:        types.Vendor(strings.ToLower(oltVendor)),
+		Address:       oltAddress,
+		Port:          oltPort,
+		Username:      oltUsername,
+		Password:      oltPassword,
+		TLSEnabled:    oltTLS,
+		TLSSkipVerify: oltTLSSkipVe,
+		Timeout:       time.Duration(timeoutSecs) * time.Second,
+		Metadata:      make(map[string]string),
+	}
+
+	if !outputJSON {
+		fmt.Printf("Connecting to OLT... ")
+	}
+	if err := driver.Connect(ctx, config); err != nil {
+		cancel()
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return nil, fmt.Errorf("failed to connect: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+
+	return &oltConnection{
+		driver: driver,
+		ctx:    ctx,
+		cancel: cancel,
+	}, nil
+}
+
+// getDriverV2 returns the DriverV2 interface or an error if not supported
+func (c *oltConnection) getDriverV2() (types.DriverV2, error) {
+	if c.driverV2 != nil {
+		return c.driverV2, nil
+	}
+	driverV2, ok := c.driver.(types.DriverV2)
+	if !ok {
+		return nil, fmt.Errorf("driver for vendor %s does not support this operation", oltVendor)
+	}
+	c.driverV2 = driverV2
+	return driverV2, nil
+}
+
+// close disconnects from the OLT
+func (c *oltConnection) close() {
+	if c.driver != nil {
+		c.driver.Disconnect(c.ctx)
+	}
+	if c.cancel != nil {
+		c.cancel()
+	}
+}
+
+// =============================================================================
+// ONU Lookup Helpers
+// =============================================================================
+
+// lookupONUBySerial finds an ONU by serial number
+func lookupONUBySerial(ctx context.Context, driverV2 types.DriverV2, serial string) (*types.ONUInfo, error) {
+	if !outputJSON {
+		fmt.Printf("Looking up ONU by serial... ")
+	}
+	onu, err := driverV2.GetONUBySerial(ctx, serial)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return nil, fmt.Errorf("failed to find ONU: %w", err)
+	}
+	if onu == nil {
+		if !outputJSON {
+			fmt.Printf("NOT FOUND\n")
+		}
+		return nil, fmt.Errorf("ONU with serial %s not found", serial)
+	}
+	if !outputJSON {
+		fmt.Printf("OK (port %s, id %d)\n", onu.PONPort, onu.ONUID)
+	}
+	return onu, nil
+}
+
+// lookupONUByPortID finds an ONU by PON port and ONU ID
+func lookupONUByPortID(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int) (*types.ONUInfo, error) {
+	if !outputJSON {
+		fmt.Printf("Looking up ONU by port/id... ")
+	}
+	filter := &types.ONUFilter{PONPort: ponPort}
+	onus, err := driverV2.GetONUList(ctx, filter)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return nil, fmt.Errorf("failed to get ONU list: %w", err)
+	}
+
+	for i := range onus {
+		if onus[i].ONUID == onuID && onus[i].PONPort == ponPort {
+			if !outputJSON {
+				fmt.Printf("OK\n")
+			}
+			return &onus[i], nil
+		}
+	}
+
+	if !outputJSON {
+		fmt.Printf("NOT FOUND\n")
+	}
+	return nil, fmt.Errorf("ONU %d not found on port %s", onuID, ponPort)
+}
+
+// resolveONU looks up an ONU by serial or port/id and returns port and id
+func resolveONU(ctx context.Context, driverV2 types.DriverV2, serial, ponPort string, onuID int) (string, int, error) {
+	if serial != "" && (ponPort == "" || onuID == 0) {
+		onu, err := lookupONUBySerial(ctx, driverV2, serial)
+		if err != nil {
+			return "", 0, err
+		}
+		return onu.PONPort, onu.ONUID, nil
+	}
+	return ponPort, onuID, nil
+}
+
+// =============================================================================
+// Validation Helpers
+// =============================================================================
+
+// serialNumberRegex matches ONU serial number format: 4 letters + 8 hex digits
+var serialNumberRegex = regexp.MustCompile(`^[A-Za-z]{4}[0-9A-Fa-f]{8}$`)
+
+// validateSerialNumber validates the ONU serial number format
+func validateSerialNumber(serial string) error {
+	if serial == "" {
+		return fmt.Errorf("serial number is required")
+	}
+	if !serialNumberRegex.MatchString(serial) {
+		return fmt.Errorf("invalid serial number format: must be 4 letters followed by 8 hex digits (e.g., HWTC12345678)")
+	}
+	return nil
+}
+
+// =============================================================================
+// Output Helpers
+// =============================================================================
+
+// printONURegistration prints ONU registration details
+func printONURegistration(onu *types.ONUInfo) {
+	fmt.Printf("Registration\n")
+	fmt.Printf("------------\n")
+	fmt.Printf("  Serial:          %s\n", onu.Serial)
+	fmt.Printf("  PON Port:        %s\n", onu.PONPort)
+	fmt.Printf("  ONU ID:          %d\n", onu.ONUID)
+	if onu.MAC != "" {
+		fmt.Printf("  MAC Address:     %s\n", onu.MAC)
+	}
+	if onu.Model != "" {
+		fmt.Printf("  Model:           %s\n", onu.Model)
+	}
+	fmt.Println()
+}
+
+// printONUStatus prints ONU status details
+func printONUStatus(onu *types.ONUInfo) {
+	fmt.Printf("Status\n")
+	fmt.Printf("------\n")
+	fmt.Printf("  Admin State:     %s\n", onu.AdminState)
+	fmt.Printf("  Oper State:      %s\n", onu.OperState)
+	status := "offline"
+	if onu.IsOnline {
+		status = "online"
+	}
+	fmt.Printf("  Connection:      %s\n", status)
+	if onu.UptimeSeconds > 0 {
+		uptime := time.Duration(onu.UptimeSeconds) * time.Second
+		fmt.Printf("  Uptime:          %s\n", uptime)
+	}
+	if !onu.LastOnline.IsZero() {
+		fmt.Printf("  Last Online:     %s\n", onu.LastOnline.Format("2006-01-02 15:04:05"))
+	}
+	fmt.Println()
+}
+
+// printOpticalPower prints optical power information
+func printOpticalPower(onu *types.ONUInfo, power *types.ONUPowerReading) {
+	fmt.Printf("Optical Power\n")
+	fmt.Printf("-------------\n")
+	if power != nil {
+		printPowerReading("ONU Tx", power.TxPowerDBm, types.GPONTxLowThreshold, types.GPONTxHighThreshold)
+		printPowerReading("ONU Rx", power.RxPowerDBm, types.GPONRxLowThreshold, types.GPONRxHighThreshold)
+		fmt.Printf("  OLT Rx:          %.1f dBm\n", power.OLTRxDBm)
+		if power.DistanceM > 0 {
+			fmt.Printf("  Distance:        %d m\n", power.DistanceM)
+		}
+		if power.IsWithinSpec {
+			fmt.Printf("  Status:          Within spec\n")
+		} else {
+			fmt.Printf("  Status:          OUT OF SPEC - check fiber\n")
+		}
+	} else {
+		printBasicPower(onu)
+	}
+	fmt.Println()
+}
+
+// printPowerReading prints a single power reading with spec check
+func printPowerReading(label string, value, lowThreshold, highThreshold float64) {
+	fmt.Printf("  %-14s %.1f dBm", label+":", value)
+	if value < lowThreshold || value > highThreshold {
+		fmt.Printf(" [OUT OF SPEC]")
+	}
+	fmt.Println()
+}
+
+// printBasicPower prints basic power info from ONU when detailed reading not available
+func printBasicPower(onu *types.ONUInfo) {
+	if onu.TxPowerDBm != 0 {
+		fmt.Printf("  ONU Tx:          %.1f dBm\n", onu.TxPowerDBm)
+	}
+	if onu.RxPowerDBm != 0 {
+		fmt.Printf("  ONU Rx:          %.1f dBm\n", onu.RxPowerDBm)
+	}
+	if onu.DistanceM > 0 {
+		fmt.Printf("  Distance:        %d m\n", onu.DistanceM)
+	}
+	if onu.TxPowerDBm == 0 && onu.RxPowerDBm == 0 {
+		fmt.Printf("  (detailed power readings not available)\n")
+	}
+}
+
+// printServiceConfig prints ONU service configuration
+func printServiceConfig(onu *types.ONUInfo) {
+	fmt.Printf("Service Configuration\n")
+	fmt.Printf("---------------------\n")
+	printConfigField("Line Profile", onu.LineProfile)
+	printConfigField("Service Profile", onu.ServiceProfile)
+	if onu.VLAN > 0 {
+		fmt.Printf("  VLAN:            %d\n", onu.VLAN)
+	} else {
+		fmt.Printf("  VLAN:            -\n")
+	}
+	if onu.BandwidthDown > 0 || onu.BandwidthUp > 0 {
+		fmt.Printf("  Bandwidth:       %d/%d Mbps (down/up)\n", onu.BandwidthDown, onu.BandwidthUp)
+	}
+	fmt.Println()
+}
+
+// printConfigField prints a config field with dash for empty values
+func printConfigField(label, value string) {
+	if value != "" {
+		fmt.Printf("  %-14s %s\n", label+":", value)
+	} else {
+		fmt.Printf("  %-14s -\n", label+":")
+	}
+}
+
+// printONUSummary prints a brief ONU summary (for delete/reboot confirmation)
+func printONUSummary(onu *types.ONUInfo) {
+	fmt.Printf("ONU Details\n")
+	fmt.Printf("-----------\n")
+	fmt.Printf("  Serial:          %s\n", onu.Serial)
+	fmt.Printf("  PON Port:        %s\n", onu.PONPort)
+	fmt.Printf("  ONU ID:          %d\n", onu.ONUID)
+	status := "offline"
+	if onu.IsOnline {
+		status = "online"
+	}
+	fmt.Printf("  Status:          %s\n", status)
+	if onu.Model != "" {
+		fmt.Printf("  Model:           %s\n", onu.Model)
+	}
+	fmt.Println()
+}
+
+// =============================================================================
+// Provisioning Helpers
+// =============================================================================
+
+// printProvisionHeader prints the provision command header
+func printProvisionHeader(dryRun bool, serial string, vlan, bwDown, bwUp int, ponPort string, onuID int, lineProfile, srvProfile string) {
+	if outputJSON {
+		return
+	}
+	if dryRun {
+		fmt.Printf("ONU Provisioning (DRY RUN)\n")
+		fmt.Printf("==========================\n\n")
+	} else {
+		fmt.Printf("ONU Provisioning\n")
+		fmt.Printf("================\n\n")
+	}
+	fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+	fmt.Printf("ONU Serial: %s\n", serial)
+	fmt.Printf("VLAN: %d\n", vlan)
+	fmt.Printf("Bandwidth: %d/%d Mbps (down/up)\n", bwDown, bwUp)
+	if ponPort != "" {
+		fmt.Printf("Target PON Port: %s\n", ponPort)
+	}
+	if onuID != 0 {
+		fmt.Printf("Target ONU ID: %d\n", onuID)
+	}
+	if lineProfile != "" {
+		fmt.Printf("Line Profile: %s\n", lineProfile)
+	}
+	if srvProfile != "" {
+		fmt.Printf("Service Profile: %s\n", srvProfile)
+	}
+	fmt.Println()
+}
+
+// printDryRunOutput prints dry run output
+func printDryRunOutput(serial string, vlan, bwDown, bwUp int, ponPort string, onuID int) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("DRY RUN - No changes made\n\n")
+	fmt.Printf("Would provision ONU with the following configuration:\n")
+	fmt.Printf("  Serial:          %s\n", serial)
+	fmt.Printf("  VLAN:            %d\n", vlan)
+	fmt.Printf("  Bandwidth Down:  %d Mbps\n", bwDown)
+	fmt.Printf("  Bandwidth Up:    %d Mbps\n", bwUp)
+	if ponPort != "" {
+		fmt.Printf("  PON Port:        %s\n", ponPort)
+	} else {
+		fmt.Printf("  PON Port:        (auto-detect)\n")
+	}
+	if onuID != 0 {
+		fmt.Printf("  ONU ID:          %d\n", onuID)
+	} else {
+		fmt.Printf("  ONU ID:          (auto-assign)\n")
+	}
+}
+
+// printProvisionSuccess prints provisioning success message
+func printProvisionSuccess(subscriberID, sessionID, assignedIP string) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("Provisioning Complete\n")
+	fmt.Printf("---------------------\n")
+	if subscriberID != "" {
+		fmt.Printf("  Subscriber ID:   %s\n", subscriberID)
+	}
+	if sessionID != "" {
+		fmt.Printf("  Session ID:      %s\n", sessionID)
+	}
+	if assignedIP != "" {
+		fmt.Printf("  Assigned IP:     %s\n", assignedIP)
+	}
+	fmt.Printf("  Status:          Success\n")
+}
+
+// =============================================================================
+// Delete/Reboot Helpers
+// =============================================================================
+
+// printDeleteHeader prints the delete command header
+func printDeleteHeader(serial, ponPort string, onuID int) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU Deletion\n")
+	fmt.Printf("============\n\n")
+	fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+	if serial != "" {
+		fmt.Printf("ONU: %s\n\n", serial)
+	} else {
+		fmt.Printf("ONU: %s ONU %d\n\n", ponPort, onuID)
+	}
+}
+
+// printRebootHeader prints the reboot command header
+func printRebootHeader(serial, ponPort string, onuID int) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU Reboot\n")
+	fmt.Printf("==========\n\n")
+	fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+	if serial != "" {
+		fmt.Printf("ONU: %s\n\n", serial)
+	} else {
+		fmt.Printf("ONU: %s ONU %d\n\n", ponPort, onuID)
+	}
+}
+
+// printDeleteSuccess prints deletion success message
+func printDeleteSuccess(ponPort string, onuID int) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU deleted successfully\n")
+	fmt.Printf("  PON Port: %s\n", ponPort)
+	fmt.Printf("  ONU ID:   %d\n", onuID)
+}
+
+// printRebootSuccess prints reboot success message
+func printRebootSuccess(ponPort string, onuID int) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU reboot initiated\n")
+	fmt.Printf("  PON Port: %s\n", ponPort)
+	fmt.Printf("  ONU ID:   %d\n", onuID)
+	fmt.Printf("\nNote: ONU will be temporarily offline during reboot.\n")
+}
+
+// executeDelete performs the ONU deletion
+func executeDelete(ctx context.Context, driver types.Driver, serial, ponPort string, onuID int) error {
+	if !outputJSON {
+		fmt.Printf("Deleting ONU... ")
+	}
+	// Always use ont-frame/slot/port-onuID format as that's what DeleteSubscriber expects
+	// ponPort is in format "frame/slot/port", e.g., "0/0/1"
+	subscriberID := fmt.Sprintf("ont-%s-%d", ponPort, onuID)
+	if err := driver.DeleteSubscriber(ctx, subscriberID); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("deletion failed: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+	return nil
+}
+
+// executeReboot performs the ONU reboot
+func executeReboot(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int) error {
+	if !outputJSON {
+		fmt.Printf("Rebooting ONU... ")
+	}
+	if err := driverV2.RestartONU(ctx, ponPort, onuID); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("reboot failed: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+	return nil
+}

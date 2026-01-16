@@ -10,6 +10,7 @@ import (
 	"time"
 
 	southbound "github.com/nanoncore/nano-southbound"
+	"github.com/nanoncore/nano-southbound/model"
 	"github.com/nanoncore/nano-southbound/types"
 	"github.com/spf13/cobra"
 )
@@ -118,9 +119,144 @@ Examples:
 var onuListStatus string
 var onuListPONPort string
 
+// ONU info flags
+var (
+	onuInfoSerial  string
+	onuInfoPONPort string
+	onuInfoONUID   int
+)
+
+// ONU provision flags
+var (
+	onuProvSerial       string
+	onuProvPONPort      string
+	onuProvONUID        int
+	onuProvVLAN         int
+	onuProvBandwidthUp  int
+	onuProvBandwidthDn  int
+	onuProvLineProfile  string
+	onuProvSrvProfile   string
+	onuProvDescription  string
+	onuProvDryRun       bool
+)
+
+// ONU delete flags
+var (
+	onuDelSerial  string
+	onuDelPONPort string
+	onuDelONUID   int
+	onuDelForce   bool
+)
+
+// ONU reboot flags
+var (
+	onuRebootSerial  string
+	onuRebootPONPort string
+	onuRebootONUID   int
+)
+
+var onuInfoCmd = &cobra.Command{
+	Use:   "onu-info",
+	Short: "Get detailed information about a specific ONU",
+	Long: `Retrieve detailed information about a specific ONU including:
+- Registration info (serial, model, MAC address)
+- Optical power readings (Tx/Rx power, OLT Rx power)
+- Connection status (admin state, oper state, uptime)
+- Service configuration (profiles, VLAN, bandwidth)
+
+The ONU can be identified by serial number OR by PON port and ONU ID.
+
+Examples:
+  # Get ONU info by serial number
+  nano-agent onu-info --serial HWTC12345678 --vendor huawei --address 192.168.1.1
+
+  # Get ONU info by PON port and ONU ID
+  nano-agent onu-info --pon-port 0/0/1 --onu-id 101 --vendor huawei --address 192.168.1.1
+
+  # Output as JSON for scripting
+  nano-agent onu-info --serial HWTC12345678 --vendor huawei --address 192.168.1.1 --json`,
+	RunE: runONUInfo,
+}
+
+var onuProvisionCmd = &cobra.Command{
+	Use:   "onu-provision",
+	Short: "Provision a new ONU on the OLT",
+	Long: `Register and provision a new ONU on the OLT.
+
+This command adds a new ONU to the OLT with the specified configuration including
+VLAN assignment and bandwidth profile.
+
+IMPORTANT: Use --dry-run to preview the operation before making changes.
+
+Examples:
+  # Provision with auto-assigned ONU ID
+  nano-agent onu-provision --serial HWTC12345678 --vlan 100 \
+    --bandwidth-down 100 --bandwidth-up 50 \
+    --vendor huawei --address 192.168.1.1
+
+  # Provision with specific PON port and ONU ID
+  nano-agent onu-provision --serial HWTC12345678 --pon-port 0/0/1 --onu-id 101 \
+    --vlan 100 --vendor huawei --address 192.168.1.1
+
+  # Dry run to preview the provisioning
+  nano-agent onu-provision --dry-run --serial HWTC12345678 --vlan 100 \
+    --vendor huawei --address 192.168.1.1
+
+  # Provision with line profile
+  nano-agent onu-provision --serial HWTC12345678 --vlan 100 \
+    --line-profile HSI_1G --vendor huawei --address 192.168.1.1`,
+	RunE: runONUProvision,
+}
+
+var onuDeleteCmd = &cobra.Command{
+	Use:   "onu-delete",
+	Short: "Delete an ONU from the OLT",
+	Long: `Remove an ONU from the OLT configuration.
+
+This command deprovisions and removes an ONU from the OLT. The ONU can be
+identified by serial number OR by PON port and ONU ID.
+
+WARNING: This is a destructive operation. Use --force to confirm.
+
+Examples:
+  # Delete by serial number
+  nano-agent onu-delete --serial HWTC12345678 --force \
+    --vendor huawei --address 192.168.1.1
+
+  # Delete by PON port and ONU ID
+  nano-agent onu-delete --pon-port 0/0/1 --onu-id 101 --force \
+    --vendor huawei --address 192.168.1.1`,
+	RunE: runONUDelete,
+}
+
+var onuRebootCmd = &cobra.Command{
+	Use:   "onu-reboot",
+	Short: "Reboot a specific ONU",
+	Long: `Remotely reboot an ONU.
+
+This command triggers a remote reboot of the specified ONU. Useful for
+troubleshooting connectivity issues or clearing stuck states.
+
+The ONU can be identified by serial number OR by PON port and ONU ID.
+
+Examples:
+  # Reboot by serial number
+  nano-agent onu-reboot --serial HWTC12345678 \
+    --vendor huawei --address 192.168.1.1
+
+  # Reboot by PON port and ONU ID
+  nano-agent onu-reboot --pon-port 0/0/1 --onu-id 101 \
+    --vendor huawei --address 192.168.1.1`,
+	RunE: runONUReboot,
+}
+
 func init() {
 	// Common OLT connection flags for all OLT commands
-	for _, cmd := range []*cobra.Command{discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd} {
+	oltCommands := []*cobra.Command{
+		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
+		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuRebootCmd,
+	}
+	for _, cmd := range oltCommands {
 		cmd.Flags().StringVar(&oltVendor, "vendor", "", "OLT vendor (vsol, cdata, nokia, huawei, zte, etc.) [required]")
 		cmd.Flags().StringVar(&oltAddress, "address", "", "OLT management IP address [required]")
 		cmd.Flags().IntVar(&oltPort, "port", 0, "OLT management port (default based on protocol)")
@@ -149,11 +285,45 @@ func init() {
 	onuListCmd.Flags().StringVar(&onuListStatus, "status", "", "Filter by status (online, offline, all)")
 	onuListCmd.Flags().StringVar(&onuListPONPort, "pon-port", "", "Filter by PON port")
 
+	// ONU info flags
+	onuInfoCmd.Flags().StringVar(&onuInfoSerial, "serial", "", "ONU serial number")
+	onuInfoCmd.Flags().StringVar(&onuInfoPONPort, "pon-port", "", "PON port (required if not using serial)")
+	onuInfoCmd.Flags().IntVar(&onuInfoONUID, "onu-id", 0, "ONU ID (required if not using serial)")
+
+	// ONU provision flags
+	onuProvisionCmd.Flags().StringVar(&onuProvSerial, "serial", "", "ONU serial number [required]")
+	onuProvisionCmd.Flags().StringVar(&onuProvPONPort, "pon-port", "", "Target PON port (auto-detect if not specified)")
+	onuProvisionCmd.Flags().IntVar(&onuProvONUID, "onu-id", 0, "Target ONU ID (auto-assign if not specified)")
+	onuProvisionCmd.Flags().IntVar(&onuProvVLAN, "vlan", 0, "VLAN ID [required]")
+	onuProvisionCmd.Flags().IntVar(&onuProvBandwidthDn, "bandwidth-down", 100, "Download bandwidth in Mbps")
+	onuProvisionCmd.Flags().IntVar(&onuProvBandwidthUp, "bandwidth-up", 50, "Upload bandwidth in Mbps")
+	onuProvisionCmd.Flags().StringVar(&onuProvLineProfile, "line-profile", "", "Line profile name")
+	onuProvisionCmd.Flags().StringVar(&onuProvSrvProfile, "service-profile", "", "Service profile name")
+	onuProvisionCmd.Flags().StringVar(&onuProvDescription, "description", "", "Subscriber description")
+	onuProvisionCmd.Flags().BoolVar(&onuProvDryRun, "dry-run", false, "Preview the operation without making changes")
+	onuProvisionCmd.MarkFlagRequired("serial")
+	onuProvisionCmd.MarkFlagRequired("vlan")
+
+	// ONU delete flags
+	onuDeleteCmd.Flags().StringVar(&onuDelSerial, "serial", "", "ONU serial number")
+	onuDeleteCmd.Flags().StringVar(&onuDelPONPort, "pon-port", "", "PON port (required if not using serial)")
+	onuDeleteCmd.Flags().IntVar(&onuDelONUID, "onu-id", 0, "ONU ID (required if not using serial)")
+	onuDeleteCmd.Flags().BoolVar(&onuDelForce, "force", false, "Confirm the deletion")
+
+	// ONU reboot flags
+	onuRebootCmd.Flags().StringVar(&onuRebootSerial, "serial", "", "ONU serial number")
+	onuRebootCmd.Flags().StringVar(&onuRebootPONPort, "pon-port", "", "PON port (required if not using serial)")
+	onuRebootCmd.Flags().IntVar(&onuRebootONUID, "onu-id", 0, "ONU ID (required if not using serial)")
+
 	// Add commands to root
 	rootCmd.AddCommand(discoverCmd)
 	rootCmd.AddCommand(diagnoseCmd)
 	rootCmd.AddCommand(oltStatusCmd)
 	rootCmd.AddCommand(onuListCmd)
+	rootCmd.AddCommand(onuInfoCmd)
+	rootCmd.AddCommand(onuProvisionCmd)
+	rootCmd.AddCommand(onuDeleteCmd)
+	rootCmd.AddCommand(onuRebootCmd)
 }
 
 // createOLTDriver creates a driver connection to the OLT
@@ -718,5 +888,324 @@ func runONUList(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	return nil
+}
+
+func runONUInfo(cmd *cobra.Command, args []string) error {
+	if err := validateONUIdentifier(onuInfoSerial, onuInfoPONPort, onuInfoONUID); err != nil {
+		return err
+	}
+
+	printONUInfoHeader()
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	onu, err := findONU(conn.ctx, driverV2, onuInfoSerial, onuInfoPONPort, onuInfoONUID)
+	if err != nil {
+		return err
+	}
+
+	powerReading := getOptionalPowerReading(conn.ctx, driverV2, onu)
+
+	return outputONUInfo(onu, powerReading)
+}
+
+// validateONUIdentifier validates that either serial or port+id is provided
+func validateONUIdentifier(serial, ponPort string, onuID int) error {
+	if serial == "" && (ponPort == "" || onuID == 0) {
+		return fmt.Errorf("provide either --serial OR both --pon-port and --onu-id")
+	}
+	return nil
+}
+
+// printONUInfoHeader prints the command header
+func printONUInfoHeader() {
+	if !outputJSON {
+		fmt.Printf("ONU Information\n")
+		fmt.Printf("===============\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		if onuInfoSerial != "" {
+			fmt.Printf("ONU: %s\n\n", onuInfoSerial)
+		} else {
+			fmt.Printf("ONU: %s ONU %d\n\n", onuInfoPONPort, onuInfoONUID)
+		}
+	}
+}
+
+// findONU looks up an ONU by serial or port/id
+func findONU(ctx context.Context, driverV2 types.DriverV2, serial, ponPort string, onuID int) (*types.ONUInfo, error) {
+	if serial != "" {
+		return lookupONUBySerial(ctx, driverV2, serial)
+	}
+	return lookupONUByPortID(ctx, driverV2, ponPort, onuID)
+}
+
+// getOptionalPowerReading attempts to get power reading, returns nil on failure
+func getOptionalPowerReading(ctx context.Context, driverV2 types.DriverV2, onu *types.ONUInfo) *types.ONUPowerReading {
+	if !outputJSON {
+		fmt.Printf("Getting optical power... ")
+	}
+	power, err := driverV2.GetONUPower(ctx, onu.PONPort, onu.ONUID)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("SKIPPED (not available)\n")
+		}
+		return nil
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+	return power
+}
+
+// outputONUInfo outputs ONU info in JSON or human-readable format
+func outputONUInfo(onu *types.ONUInfo, power *types.ONUPowerReading) error {
+	if outputJSON {
+		return outputONUInfoJSON(onu, power)
+	}
+	fmt.Println()
+	printONURegistration(onu)
+	printONUStatus(onu)
+	printOpticalPower(onu, power)
+	printServiceConfig(onu)
+	if !onu.ProvisionedAt.IsZero() {
+		fmt.Printf("Provisioned at: %s\n", onu.ProvisionedAt.Format("2006-01-02 15:04:05"))
+	}
+	return nil
+}
+
+// outputONUInfoJSON outputs ONU info as JSON
+func outputONUInfoJSON(onu *types.ONUInfo, power *types.ONUPowerReading) error {
+	output := struct {
+		ONU   *types.ONUInfo         `json:"onu"`
+		Power *types.ONUPowerReading `json:"power,omitempty"`
+	}{ONU: onu, Power: power}
+	data, _ := json.MarshalIndent(output, "", "  ")
+	fmt.Println(string(data))
+	return nil
+}
+
+func runONUProvision(cmd *cobra.Command, args []string) error {
+	// Validate serial number format (NAN-158)
+	if err := validateSerialNumber(onuProvSerial); err != nil {
+		return err
+	}
+
+	printProvisionHeader(onuProvDryRun, onuProvSerial, onuProvVLAN, onuProvBandwidthDn, onuProvBandwidthUp,
+		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile)
+
+	subscriber, tier := buildProvisionModels()
+
+	if onuProvDryRun {
+		return outputProvisionDryRun(subscriber, tier)
+	}
+
+	conn, err := connectToOLT(120)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	result, err := executeProvision(conn.ctx, conn.driver, subscriber, tier)
+	if err != nil {
+		return err
+	}
+
+	return outputProvisionResult(result)
+}
+
+// buildProvisionModels creates subscriber and tier models for provisioning
+func buildProvisionModels() (*model.Subscriber, *model.ServiceTier) {
+	subscriber := &model.Subscriber{
+		Name: onuProvSerial,
+		Annotations: map[string]string{
+			"nano.io/pon-port": onuProvPONPort,
+		},
+		Spec: model.SubscriberSpec{
+			ONUSerial:   onuProvSerial,
+			VLAN:        onuProvVLAN,
+			Tier:        "cli-provision",
+			Description: onuProvDescription,
+		},
+	}
+	if onuProvONUID != 0 {
+		subscriber.Annotations["nano.io/onu-id"] = fmt.Sprintf("%d", onuProvONUID)
+	}
+	if onuProvLineProfile != "" {
+		subscriber.Annotations["nano.io/line-profile"] = onuProvLineProfile
+	}
+	if onuProvSrvProfile != "" {
+		subscriber.Annotations["nano.io/service-profile"] = onuProvSrvProfile
+	}
+
+	tier := &model.ServiceTier{
+		Name: "cli-provision",
+		Spec: model.ServiceTierSpec{
+			BandwidthDown: onuProvBandwidthDn,
+			BandwidthUp:   onuProvBandwidthUp,
+			QoSClass:      "standard",
+		},
+	}
+	return subscriber, tier
+}
+
+// outputProvisionDryRun outputs dry run results
+func outputProvisionDryRun(subscriber *model.Subscriber, tier *model.ServiceTier) error {
+	if outputJSON {
+		output := struct {
+			Action     string             `json:"action"`
+			Subscriber *model.Subscriber  `json:"subscriber"`
+			Tier       *model.ServiceTier `json:"tier"`
+		}{Action: "provision", Subscriber: subscriber, Tier: tier}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	printDryRunOutput(onuProvSerial, onuProvVLAN, onuProvBandwidthDn, onuProvBandwidthUp, onuProvPONPort, onuProvONUID)
+	return nil
+}
+
+// executeProvision performs the ONU provisioning
+func executeProvision(ctx context.Context, driver types.Driver, subscriber *model.Subscriber, tier *model.ServiceTier) (*types.SubscriberResult, error) {
+	if !outputJSON {
+		fmt.Printf("Provisioning ONU... ")
+	}
+	result, err := driver.CreateSubscriber(ctx, subscriber, tier)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return nil, fmt.Errorf("provisioning failed: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+	return result, nil
+}
+
+// outputProvisionResult outputs provisioning results
+func outputProvisionResult(result *types.SubscriberResult) error {
+	if outputJSON {
+		data, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	printProvisionSuccess(result.SubscriberID, result.SessionID, result.AssignedIP)
+	return nil
+}
+
+func runONUDelete(cmd *cobra.Command, args []string) error {
+	if err := validateONUIdentifier(onuDelSerial, onuDelPONPort, onuDelONUID); err != nil {
+		return err
+	}
+	if !onuDelForce {
+		return fmt.Errorf("this is a destructive operation; use --force to confirm")
+	}
+
+	printDeleteHeader(onuDelSerial, onuDelPONPort, onuDelONUID)
+
+	conn, err := connectToOLT(120)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	// Resolve ONU and show details before delete (NAN-159)
+	ponPort, onuID, err := resolveONU(conn.ctx, driverV2, onuDelSerial, onuDelPONPort, onuDelONUID)
+	if err != nil {
+		return err
+	}
+
+	// Show ONU details before deletion
+	onu, err := lookupONUByPortID(conn.ctx, driverV2, ponPort, onuID)
+	if err != nil {
+		return err
+	}
+	if !outputJSON {
+		printONUSummary(onu)
+	}
+
+	if err := executeDelete(conn.ctx, conn.driver, onuDelSerial, ponPort, onuID); err != nil {
+		return err
+	}
+
+	return outputDeleteResult(onuDelSerial, ponPort, onuID)
+}
+
+// outputDeleteResult outputs deletion results
+func outputDeleteResult(serial, ponPort string, onuID int) error {
+	if outputJSON {
+		output := struct {
+			Status  string `json:"status"`
+			Serial  string `json:"serial,omitempty"`
+			PONPort string `json:"pon_port"`
+			ONUID   int    `json:"onu_id"`
+		}{Status: "deleted", Serial: serial, PONPort: ponPort, ONUID: onuID}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	printDeleteSuccess(ponPort, onuID)
+	return nil
+}
+
+func runONUReboot(cmd *cobra.Command, args []string) error {
+	if err := validateONUIdentifier(onuRebootSerial, onuRebootPONPort, onuRebootONUID); err != nil {
+		return err
+	}
+
+	printRebootHeader(onuRebootSerial, onuRebootPONPort, onuRebootONUID)
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	ponPort, onuID, err := resolveONU(conn.ctx, driverV2, onuRebootSerial, onuRebootPONPort, onuRebootONUID)
+	if err != nil {
+		return err
+	}
+
+	if err := executeReboot(conn.ctx, driverV2, ponPort, onuID); err != nil {
+		return err
+	}
+
+	return outputRebootResult(onuRebootSerial, ponPort, onuID)
+}
+
+// outputRebootResult outputs reboot results
+func outputRebootResult(serial, ponPort string, onuID int) error {
+	if outputJSON {
+		output := struct {
+			Status  string `json:"status"`
+			Serial  string `json:"serial,omitempty"`
+			PONPort string `json:"pon_port"`
+			ONUID   int    `json:"onu_id"`
+		}{Status: "reboot_initiated", Serial: serial, PONPort: ponPort, ONUID: onuID}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	printRebootSuccess(ponPort, onuID)
 	return nil
 }
