@@ -14,6 +14,7 @@ import (
 
 	"github.com/nanoncore/nano-agent/pkg/agent"
 	"github.com/nanoncore/nano-agent/pkg/agent/poller"
+	"github.com/nanoncore/nano-agent/pkg/agent/resilience"
 	"github.com/spf13/cobra"
 )
 
@@ -839,6 +840,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 
 	// Create OLT poller if enabled
 	var oltPoller *poller.Poller
+	var resilientPusher *resilience.ResilientMetricsPusher
 	if enableOLTPolling {
 		pollerCfg := &poller.Config{
 			WorkerCount:    pollerWorkers,
@@ -848,9 +850,19 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			LogPrefix:      "[olt-poller]",
 		}
 		adapter := poller.NewClientAdapter(client)
-		oltPoller = poller.New(adapter, adapter, adapter, pollerCfg)
+
+		// Wrap the metrics pusher with resilience layer (circuit breaker + buffering)
+		resilientPusher = resilience.NewResilientMetricsPusher(
+			adapter, // inner pusher
+			resilience.DefaultResilientPusherConfig(),
+			resilience.DefaultCircuitBreakerConfig(),
+			resilience.DefaultMetricsBufferConfig(),
+		)
+
+		// Use adapter for ONU/telemetry, resilient pusher for metrics
+		oltPoller = poller.New(adapter, adapter, resilientPusher, pollerCfg)
 		oltPoller.Start(ctx)
-		fmt.Printf("[%s] OLT poller started with %d workers\n", time.Now().Format("15:04:05"), pollerWorkers)
+		fmt.Printf("[%s] OLT poller started with %d workers (metrics resilience enabled)\n", time.Now().Format("15:04:05"), pollerWorkers)
 	}
 
 	// Send initial heartbeat
@@ -867,6 +879,9 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			if oltPoller != nil {
 				oltPoller.Stop()
 			}
+			if resilientPusher != nil {
+				resilientPusher.Stop()
+			}
 			return nil
 
 		case sig := <-sigChan:
@@ -875,6 +890,10 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			// Stop OLT poller
 			if oltPoller != nil {
 				oltPoller.Stop()
+			}
+			// Stop resilient pusher (flushes buffered metrics)
+			if resilientPusher != nil {
+				resilientPusher.Stop()
 			}
 
 			// Send final status update
