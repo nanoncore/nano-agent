@@ -187,8 +187,8 @@ func (d *BaseCLIDriver) Connect(ctx context.Context) error {
 	sshConfig := &ssh.ClientConfig{
 		User: d.config.Username,
 		Auth: []ssh.AuthMethod{
+			keyboardInteractiveAuth, // Try keyboard-interactive first for buggy OLTs
 			ssh.Password(d.config.Password),
-			keyboardInteractiveAuth,
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // User-controlled equipment
 		Timeout:         d.config.Timeout,
