@@ -171,25 +171,38 @@ func (d *BaseCLIDriver) Connect(ctx context.Context) error {
 		return nil // Already connected
 	}
 
-	// Create keyboard-interactive handler that responds with password
-	// Some devices (e.g., V-SOL OLTs) have buggy SSH implementations that
-	// respond with keyboard-interactive prompts even for password auth
-	keyboardInteractiveAuth := ssh.KeyboardInteractive(
-		func(user, instruction string, questions []string, echos []bool) ([]string, error) {
-			answers := make([]string, len(questions))
-			for i := range questions {
-				answers[i] = d.config.Password
-			}
-			return answers, nil
-		},
-	)
+	// Build auth methods based on vendor
+	// V-SOL OLTs have a non-compliant SSH implementation that sends
+	// SSH_MSG_USERAUTH_FAILURE (type 51) instead of SSH_MSG_USERAUTH_INFO_REQUEST
+	// (type 60) when keyboard-interactive is offered, causing handshake failure.
+	var authMethods []ssh.AuthMethod
+	vendor := strings.ToLower(d.config.Vendor)
+
+	if vendor == "vsol" || vendor == "v-sol" {
+		// V-SOL: Password auth only (non-compliant SSH implementation)
+		authMethods = []ssh.AuthMethod{
+			ssh.Password(d.config.Password),
+		}
+	} else {
+		// Other vendors: keyboard-interactive + password
+		keyboardInteractiveAuth := ssh.KeyboardInteractive(
+			func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+				answers := make([]string, len(questions))
+				for i := range questions {
+					answers[i] = d.config.Password
+				}
+				return answers, nil
+			},
+		)
+		authMethods = []ssh.AuthMethod{
+			keyboardInteractiveAuth,
+			ssh.Password(d.config.Password),
+		}
+	}
 
 	sshConfig := &ssh.ClientConfig{
-		User: d.config.Username,
-		Auth: []ssh.AuthMethod{
-			keyboardInteractiveAuth, // Try keyboard-interactive first for buggy OLTs
-			ssh.Password(d.config.Password),
-		},
+		User:            d.config.Username,
+		Auth:            authMethods,
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // User-controlled equipment
 		Timeout:         d.config.Timeout,
 	}
