@@ -171,10 +171,24 @@ func (d *BaseCLIDriver) Connect(ctx context.Context) error {
 		return nil // Already connected
 	}
 
+	// Create keyboard-interactive handler that responds with password
+	// Some devices (e.g., V-SOL OLTs) have buggy SSH implementations that
+	// respond with keyboard-interactive prompts even for password auth
+	keyboardInteractiveAuth := ssh.KeyboardInteractive(
+		func(user, instruction string, questions []string, echos []bool) ([]string, error) {
+			answers := make([]string, len(questions))
+			for i := range questions {
+				answers[i] = d.config.Password
+			}
+			return answers, nil
+		},
+	)
+
 	sshConfig := &ssh.ClientConfig{
 		User: d.config.Username,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(d.config.Password),
+			keyboardInteractiveAuth,
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // User-controlled equipment
 		Timeout:         d.config.Timeout,
