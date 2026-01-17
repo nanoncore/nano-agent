@@ -155,6 +155,12 @@ var (
 	onuRebootONUID   int
 )
 
+// Port management flags
+var (
+	portPONPort string
+	portForce   bool
+)
+
 var onuInfoCmd = &cobra.Command{
 	Use:   "onu-info",
 	Short: "Get detailed information about a specific ONU",
@@ -250,11 +256,62 @@ Examples:
 	RunE: runONUReboot,
 }
 
+var portListCmd = &cobra.Command{
+	Use:   "port-list",
+	Short: "List all PON ports on an OLT",
+	Long: `List all PON ports on an OLT with their status and ONU counts.
+
+Displays admin state, operational state, ONU count, and optical power levels
+for each PON port.
+
+Examples:
+  # List all PON ports
+  nano-agent port-list --vendor huawei --address 192.168.1.1 \
+    --port 161 --protocol snmp --username admin --password admin
+
+  # Output as JSON
+  nano-agent port-list --vendor huawei --address 192.168.1.1 \
+    --port 161 --protocol snmp --username admin --password admin --json`,
+	RunE: runPortList,
+}
+
+var portEnableCmd = &cobra.Command{
+	Use:   "port-enable",
+	Short: "Enable a PON port",
+	Long: `Administratively enable a PON port on the OLT.
+
+This command enables a previously disabled PON port, allowing it to
+accept ONU connections and pass traffic.
+
+Examples:
+  # Enable a PON port
+  nano-agent port-enable --pon-port 0/0/1 \
+    --vendor huawei --address 192.168.1.1 --username admin --password admin`,
+	RunE: runPortEnable,
+}
+
+var portDisableCmd = &cobra.Command{
+	Use:   "port-disable",
+	Short: "Disable a PON port",
+	Long: `Administratively disable a PON port on the OLT.
+
+WARNING: This will disconnect all ONUs on the port. Use --force to confirm.
+
+This command disables a PON port, preventing ONU connections and traffic.
+
+Examples:
+  # Disable a PON port (requires --force)
+  nano-agent port-disable --pon-port 0/0/1 --force \
+    --vendor huawei --address 192.168.1.1 --username admin --password admin`,
+	RunE: runPortDisable,
+}
+
 func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
 		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
 		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuRebootCmd,
+		portListCmd, portEnableCmd, portDisableCmd,
 	}
 	for _, cmd := range oltCommands {
 		cmd.Flags().StringVar(&oltVendor, "vendor", "", "OLT vendor (vsol, cdata, nokia, huawei, zte, etc.) [required]")
@@ -315,6 +372,15 @@ func init() {
 	onuRebootCmd.Flags().StringVar(&onuRebootPONPort, "pon-port", "", "PON port (required if not using serial)")
 	onuRebootCmd.Flags().IntVar(&onuRebootONUID, "onu-id", 0, "ONU ID (required if not using serial)")
 
+	// Port enable flags
+	portEnableCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
+	portEnableCmd.MarkFlagRequired("pon-port")
+
+	// Port disable flags
+	portDisableCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
+	portDisableCmd.Flags().BoolVar(&portForce, "force", false, "Confirm the disable operation")
+	portDisableCmd.MarkFlagRequired("pon-port")
+
 	// Add commands to root
 	rootCmd.AddCommand(discoverCmd)
 	rootCmd.AddCommand(diagnoseCmd)
@@ -324,6 +390,9 @@ func init() {
 	rootCmd.AddCommand(onuProvisionCmd)
 	rootCmd.AddCommand(onuDeleteCmd)
 	rootCmd.AddCommand(onuRebootCmd)
+	rootCmd.AddCommand(portListCmd)
+	rootCmd.AddCommand(portEnableCmd)
+	rootCmd.AddCommand(portDisableCmd)
 }
 
 // createOLTDriver creates a driver connection to the OLT
@@ -1207,5 +1276,176 @@ func outputRebootResult(serial, ponPort string, onuID int) error {
 		return nil
 	}
 	printRebootSuccess(ponPort, onuID)
+	return nil
+}
+
+func runPortList(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("Port List\n")
+		fmt.Printf("=========\n\n")
+		fmt.Printf("OLT: %s (%s)\n\n", oltAddress, oltVendor)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting port list... ")
+	}
+	ports, err := driverV2.ListPorts(conn.ctx)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to get port list: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK (%d found)\n\n", len(ports))
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(ports, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if len(ports) == 0 {
+		fmt.Println("No PON ports found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "Port\tAdmin\tOper\tONUs\tTx Power\tDescription")
+	fmt.Fprintln(w, "----\t-----\t----\t----\t--------\t-----------")
+	for _, port := range ports {
+		tx := "-"
+		if port.TxPowerDBm != 0 {
+			tx = fmt.Sprintf("%.1f dBm", port.TxPowerDBm)
+		}
+		desc := port.Description
+		if desc == "" {
+			desc = "-"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d/%d\t%s\t%s\n",
+			port.Port, port.AdminState, port.OperState,
+			port.ONUCount, port.MaxONUs, tx, desc)
+	}
+	w.Flush()
+
+	return nil
+}
+
+func runPortEnable(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("Port Enable\n")
+		fmt.Printf("===========\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Port: %s\n\n", portPONPort)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Enabling port %s... ", portPONPort)
+	}
+	if err := driverV2.SetPortState(conn.ctx, portPONPort, true); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to enable port: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+		fmt.Printf("Port %s enabled successfully\n", portPONPort)
+	}
+
+	if outputJSON {
+		output := struct {
+			Status string `json:"status"`
+			Port   string `json:"port"`
+		}{Status: "enabled", Port: portPONPort}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+	}
+
+	return nil
+}
+
+func runPortDisable(cmd *cobra.Command, args []string) error {
+	if !portForce {
+		return fmt.Errorf("this will disconnect all ONUs on port %s; use --force to confirm", portPONPort)
+	}
+
+	if !outputJSON {
+		fmt.Printf("Port Disable\n")
+		fmt.Printf("============\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Port: %s\n\n", portPONPort)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	// Check for connected ONUs before disabling
+	ports, err := driverV2.ListPorts(conn.ctx)
+	if err == nil {
+		for _, p := range ports {
+			if p.Port == portPONPort && p.ONUCount > 0 {
+				if !outputJSON {
+					fmt.Printf("WARNING: Port %s has %d connected ONU(s)\n", portPONPort, p.ONUCount)
+				}
+				break
+			}
+		}
+	}
+
+	if !outputJSON {
+		fmt.Printf("Disabling port %s... ", portPONPort)
+	}
+	if err := driverV2.SetPortState(conn.ctx, portPONPort, false); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to disable port: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+		fmt.Printf("Port %s disabled successfully\n", portPONPort)
+	}
+
+	if outputJSON {
+		output := struct {
+			Status string `json:"status"`
+			Port   string `json:"port"`
+		}{Status: "disabled", Port: portPONPort}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+	}
+
 	return nil
 }
