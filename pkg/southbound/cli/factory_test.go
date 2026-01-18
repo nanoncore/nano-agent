@@ -12,38 +12,72 @@ type MockDriver struct {
 	capabilities *VendorCapabilities
 }
 
-func (m *MockDriver) Connect(ctx context.Context) error    { return nil }
-func (m *MockDriver) Close() error                         { return nil }
-func (m *MockDriver) Execute(ctx context.Context, cmd string) (string, error) { return "", nil }
-func (m *MockDriver) Vendor() string                       { return m.vendor }
-func (m *MockDriver) GetCapabilities() *VendorCapabilities { return m.capabilities }
-func (m *MockDriver) AddONU(ctx context.Context, req *ONUProvisionRequest) error { return nil }
+func (m *MockDriver) Connect(ctx context.Context) error                              { return nil }
+func (m *MockDriver) Close() error                                                   { return nil }
+func (m *MockDriver) Execute(ctx context.Context, cmd string) (string, error)        { return "", nil }
+func (m *MockDriver) Vendor() string                                                 { return m.vendor }
+func (m *MockDriver) GetCapabilities() *VendorCapabilities                           { return m.capabilities }
+func (m *MockDriver) AddONU(ctx context.Context, req *ONUProvisionRequest) error     { return nil }
 func (m *MockDriver) DeleteONU(ctx context.Context, ponPort string, onuID int) error { return nil }
-func (m *MockDriver) GetONUInfo(ctx context.Context, ponPort string, onuID int) (*ONUCLIInfo, error) { return nil, nil }
+func (m *MockDriver) GetONUInfo(ctx context.Context, ponPort string, onuID int) (*ONUCLIInfo, error) {
+	return nil, nil
+}
 func (m *MockDriver) RebootONU(ctx context.Context, ponPort string, onuID int) error { return nil }
-func (m *MockDriver) ConfigureVLAN(ctx context.Context, config *VLANConfig) error { return nil }
-func (m *MockDriver) GetVLANConfig(ctx context.Context, ponPort string, onuID int) (*VLANConfig, error) { return nil, nil }
-func (m *MockDriver) AddVLANTranslation(ctx context.Context, ponPort string, onuID int, translation VLANTranslation) error { return nil }
-func (m *MockDriver) RemoveVLANTranslation(ctx context.Context, ponPort string, onuID int, customerVLAN int) error { return nil }
-func (m *MockDriver) ListVLANs(ctx context.Context) ([]VLANInfo, error) { return nil, nil }
+func (m *MockDriver) ConfigureVLAN(ctx context.Context, config *VLANConfig) error    { return nil }
+func (m *MockDriver) GetVLANConfig(ctx context.Context, ponPort string, onuID int) (*VLANConfig, error) {
+	return nil, nil
+}
+func (m *MockDriver) AddVLANTranslation(ctx context.Context, ponPort string, onuID int, translation VLANTranslation) error {
+	return nil
+}
+func (m *MockDriver) RemoveVLANTranslation(ctx context.Context, ponPort string, onuID int, customerVLAN int) error {
+	return nil
+}
+func (m *MockDriver) ListVLANs(ctx context.Context) ([]VLANInfo, error)           { return nil, nil }
 func (m *MockDriver) ListLineProfiles(ctx context.Context) ([]LineProfile, error) { return nil, nil }
-func (m *MockDriver) GetLineProfile(ctx context.Context, profileID int) (*LineProfile, error) { return nil, nil }
-func (m *MockDriver) ListServiceProfiles(ctx context.Context) ([]ServiceProfile, error) { return nil, nil }
-func (m *MockDriver) GetServiceProfile(ctx context.Context, profileID int) (*ServiceProfile, error) { return nil, nil }
-func (m *MockDriver) ListTrafficProfiles(ctx context.Context) ([]TrafficProfile, error) { return nil, nil }
-func (m *MockDriver) AssignTrafficProfile(ctx context.Context, ponPort string, onuID int, profileID int) error { return nil }
+func (m *MockDriver) GetLineProfile(ctx context.Context, profileID int) (*LineProfile, error) {
+	return nil, nil
+}
+func (m *MockDriver) ListServiceProfiles(ctx context.Context) ([]ServiceProfile, error) {
+	return nil, nil
+}
+func (m *MockDriver) GetServiceProfile(ctx context.Context, profileID int) (*ServiceProfile, error) {
+	return nil, nil
+}
+func (m *MockDriver) ListTrafficProfiles(ctx context.Context) ([]TrafficProfile, error) {
+	return nil, nil
+}
+func (m *MockDriver) AssignTrafficProfile(ctx context.Context, ponPort string, onuID int, profileID int) error {
+	return nil
+}
 func (m *MockDriver) ListPONPorts(ctx context.Context) ([]PONPortInfo, error) { return nil, nil }
-func (m *MockDriver) GetPONPortInfo(ctx context.Context, slot, port int) (*PONPortInfo, error) { return nil, nil }
-func (m *MockDriver) EnablePONPort(ctx context.Context, slot, port int) error { return nil }
+func (m *MockDriver) GetPONPortInfo(ctx context.Context, slot, port int) (*PONPortInfo, error) {
+	return nil, nil
+}
+func (m *MockDriver) EnablePONPort(ctx context.Context, slot, port int) error  { return nil }
 func (m *MockDriver) DisablePONPort(ctx context.Context, slot, port int) error { return nil }
-func (m *MockDriver) SetPortDescription(ctx context.Context, slot, port int, description string) error { return nil }
-func (m *MockDriver) BatchProvision(ctx context.Context, req *BatchProvisionRequest) (*BatchResult, error) { return nil, nil }
-func (m *MockDriver) BatchConfigureVLAN(ctx context.Context, req *BatchVLANRequest) (*BatchResult, error) { return nil, nil }
+func (m *MockDriver) SetPortDescription(ctx context.Context, slot, port int, description string) error {
+	return nil
+}
+func (m *MockDriver) BatchProvision(ctx context.Context, req *BatchProvisionRequest) (*BatchResult, error) {
+	return nil, nil
+}
+func (m *MockDriver) BatchConfigureVLAN(ctx context.Context, req *BatchVLANRequest) (*BatchResult, error) {
+	return nil, nil
+}
 func (m *MockDriver) ExportConfig(ctx context.Context) (*ConfigExport, error) { return nil, nil }
-func (m *MockDriver) GetONUDiagnostics(ctx context.Context, ponPort string, onuID int) (*ONUDiagnostics, error) { return nil, nil }
-func (m *MockDriver) GetONUCounters(ctx context.Context, ponPort string, onuID int) (*PerformanceCounters, error) { return nil, nil }
-func (m *MockDriver) ClearONUCounters(ctx context.Context, ponPort string, onuID int) error { return nil }
-func (m *MockDriver) GetOpticalDiagnostics(ctx context.Context, ponPort string, onuID int) (*OpticalDiagnostics, error) { return nil, nil }
+func (m *MockDriver) GetONUDiagnostics(ctx context.Context, ponPort string, onuID int) (*ONUDiagnostics, error) {
+	return nil, nil
+}
+func (m *MockDriver) GetONUCounters(ctx context.Context, ponPort string, onuID int) (*PerformanceCounters, error) {
+	return nil, nil
+}
+func (m *MockDriver) ClearONUCounters(ctx context.Context, ponPort string, onuID int) error {
+	return nil
+}
+func (m *MockDriver) GetOpticalDiagnostics(ctx context.Context, ponPort string, onuID int) (*OpticalDiagnostics, error) {
+	return nil, nil
+}
 func (m *MockDriver) SaveConfig(ctx context.Context) error { return nil }
 
 func TestDriverFactory_RegisterAndCreate(t *testing.T) {

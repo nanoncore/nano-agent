@@ -163,13 +163,13 @@ func TestSerialNumberRegex(t *testing.T) {
 
 	invalidSerials := []string{
 		"",
-		"HWT12345678",      // only 3 letters
-		"HWTC1234567",      // only 7 hex digits
-		"HWTC123456789",    // 9 hex digits
-		"1234ABCDEFGH",     // starts with numbers
-		"HWTC1234567G",     // invalid hex digit 'G'
-		"HWTC 2345678",     // space
-		"HWTC-12345678",    // hyphen
+		"HWT12345678",   // only 3 letters
+		"HWTC1234567",   // only 7 hex digits
+		"HWTC123456789", // 9 hex digits
+		"1234ABCDEFGH",  // starts with numbers
+		"HWTC1234567G",  // invalid hex digit 'G'
+		"HWTC 2345678",  // space
+		"HWTC-12345678", // hyphen
 	}
 
 	for _, serial := range invalidSerials {

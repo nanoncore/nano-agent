@@ -36,8 +36,8 @@ type VendorCapabilities struct {
 	SupportsConfigExport   bool `json:"supports_config_export"`
 
 	// Diagnostics capabilities
-	SupportsDiagnostics       bool `json:"supports_diagnostics"`
-	SupportsOpticalDiag       bool `json:"supports_optical_diag"`
+	SupportsDiagnostics         bool `json:"supports_diagnostics"`
+	SupportsOpticalDiag         bool `json:"supports_optical_diag"`
 	SupportsPerformanceCounters bool `json:"supports_performance_counters"`
 
 	// Protocol support
@@ -48,7 +48,7 @@ type VendorCapabilities struct {
 	HasREST    bool `json:"has_rest"`
 
 	// Addressing scheme
-	PortFormat     string `json:"port_format"`      // "frame/slot/port", "shelf/slot/port", "slot/port"
+	PortFormat     string `json:"port_format"` // "frame/slot/port", "shelf/slot/port", "slot/port"
 	MaxONUsPerPort int    `json:"max_onus_per_port"`
 	MaxPONPorts    int    `json:"max_pon_ports,omitempty"`
 }
@@ -163,8 +163,8 @@ func joinStrings(strs []string, sep string) string {
 // Use this for vendors with complete feature support.
 func FullCapabilities(vendor, model string) *VendorCapabilities {
 	return &VendorCapabilities{
-		Vendor:   vendor,
-		Model:    model,
+		Vendor: vendor,
+		Model:  model,
 
 		// ONU Management
 		SupportsProvision: true,
@@ -193,8 +193,8 @@ func FullCapabilities(vendor, model string) *VendorCapabilities {
 		SupportsConfigExport:   true,
 
 		// Diagnostics
-		SupportsDiagnostics:       true,
-		SupportsOpticalDiag:       true,
+		SupportsDiagnostics:         true,
+		SupportsOpticalDiag:         true,
 		SupportsPerformanceCounters: true,
 
 		// Protocol support
@@ -214,8 +214,8 @@ func FullCapabilities(vendor, model string) *VendorCapabilities {
 // Use this for vendors with limited CLI write support.
 func ReadOnlyCapabilities(vendor, model string) *VendorCapabilities {
 	return &VendorCapabilities{
-		Vendor:   vendor,
-		Model:    model,
+		Vendor: vendor,
+		Model:  model,
 
 		// ONU Management - read only
 		SupportsProvision: false,
@@ -244,8 +244,8 @@ func ReadOnlyCapabilities(vendor, model string) *VendorCapabilities {
 		SupportsConfigExport:   true,
 
 		// Diagnostics - full support
-		SupportsDiagnostics:       true,
-		SupportsOpticalDiag:       true,
+		SupportsDiagnostics:         true,
+		SupportsOpticalDiag:         true,
 		SupportsPerformanceCounters: true,
 
 		// Protocol support
@@ -265,8 +265,8 @@ func ReadOnlyCapabilities(vendor, model string) *VendorCapabilities {
 // Use this for budget OLTs with very limited capabilities.
 func MinimalCapabilities(vendor, model string) *VendorCapabilities {
 	return &VendorCapabilities{
-		Vendor:   vendor,
-		Model:    model,
+		Vendor: vendor,
+		Model:  model,
 
 		// ONU Management - basic only
 		SupportsProvision: true,
@@ -295,8 +295,8 @@ func MinimalCapabilities(vendor, model string) *VendorCapabilities {
 		SupportsConfigExport:   false,
 
 		// Diagnostics - basic
-		SupportsDiagnostics:       true,
-		SupportsOpticalDiag:       true,
+		SupportsDiagnostics:         true,
+		SupportsOpticalDiag:         true,
 		SupportsPerformanceCounters: false,
 
 		// Protocol support

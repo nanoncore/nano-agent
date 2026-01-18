@@ -128,16 +128,16 @@ var (
 
 // ONU provision flags
 var (
-	onuProvSerial       string
-	onuProvPONPort      string
-	onuProvONUID        int
-	onuProvVLAN         int
-	onuProvBandwidthUp  int
-	onuProvBandwidthDn  int
-	onuProvLineProfile  string
-	onuProvSrvProfile   string
-	onuProvDescription  string
-	onuProvDryRun       bool
+	onuProvSerial      string
+	onuProvPONPort     string
+	onuProvONUID       int
+	onuProvVLAN        int
+	onuProvBandwidthUp int
+	onuProvBandwidthDn int
+	onuProvLineProfile string
+	onuProvSrvProfile  string
+	onuProvDescription string
+	onuProvDryRun      bool
 )
 
 // ONU delete flags
