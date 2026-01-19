@@ -810,6 +810,28 @@ func (p *Poller) buildMetricsBatch(result *PollResult, oltName string) *MetricsB
 		}
 	}
 
+	// Aggregate ONU counts by PON port (vendor-safe: skip empty PONPort)
+	ponPortCounts := make(map[string]int)
+	for _, onu := range result.ONUs {
+		if onu.PONPort != "" {
+			ponPortCounts[onu.PONPort]++
+		}
+	}
+
+	// Add PON port ONU count metrics
+	for ponPort, count := range ponPortCounts {
+		metrics = append(metrics, MetricSample{
+			Name:      "pon_port_onu_count",
+			Value:     float64(count),
+			Timestamp: now,
+			Labels: map[string]string{
+				"olt_id":   result.OLTID,
+				"olt_name": oltName,
+				"pon_port": ponPort,
+			},
+		})
+	}
+
 	return &MetricsBatch{Metrics: metrics}
 }
 
