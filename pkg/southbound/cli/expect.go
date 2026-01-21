@@ -18,7 +18,7 @@ var DefaultPromptPattern = regexp.MustCompile(`(?m)[\w\-\[\]()]+[#>]\s*$`)
 
 // VendorPrompts contains vendor-specific prompt patterns
 var VendorPrompts = map[string]*regexp.Regexp{
-	"huawei": regexp.MustCompile(`(?m)(<[\w\-]+>|\[[\w\-~]+\])\s*$`),
+	"huawei": regexp.MustCompile(`(?m)(<[\w\-]+>|\[[\w\-~/]+\])\s*$`),
 	"vsol":   regexp.MustCompile(`(?m)[\w\-]+[#>]\s*$`),
 	"cdata":  regexp.MustCompile(`(?m)[\w\-]+[#>]\s*$`),
 	"zte":    regexp.MustCompile(`(?m)(<[\w\-]+>|\[[\w\-~]+\])\s*$`),

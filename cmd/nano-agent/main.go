@@ -13,9 +13,15 @@ import (
 	"time"
 
 	"github.com/nanoncore/nano-agent/pkg/agent"
+	"github.com/nanoncore/nano-agent/pkg/agent/command"
 	"github.com/nanoncore/nano-agent/pkg/agent/poller"
 	"github.com/nanoncore/nano-agent/pkg/agent/resilience"
+	"github.com/nanoncore/nano-agent/pkg/southbound/cli"
 	"github.com/spf13/cobra"
+
+	// Import vendor drivers to register them with the CLI factory
+	_ "github.com/nanoncore/nano-agent/pkg/southbound/vendors/huawei"
+	_ "github.com/nanoncore/nano-agent/pkg/southbound/vendors/vsol"
 )
 
 var (
@@ -865,11 +871,17 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		fmt.Printf("[%s] OLT poller started with %d workers (metrics resilience enabled)\n", time.Now().Format("15:04:05"), pollerWorkers)
 	}
 
+	// Create command executor for processing pending commands
+	cmdExecutor := command.NewExecutor(client, func(cliCfg cli.CLIConfig) (cli.CLIDriver, error) {
+		return cli.CreateDriver(cliCfg, "") // model can be empty, vendor is used for driver selection
+	})
+	fmt.Printf("[%s] Command executor initialized\n", time.Now().Format("15:04:05"))
+
 	// Send initial heartbeat
 	sendHeartbeat(client, cfg.NodeID, state, cfg)
 
 	// Perform initial config sync (this also populates the poller with OLTs)
-	syncConfigWithPoller(client, cfg.NodeID, state, cfg, oltPoller)
+	syncConfigWithPoller(ctx, client, cfg.NodeID, state, cfg, oltPoller, cmdExecutor)
 
 	// Main loop
 	for {
@@ -908,7 +920,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 			sendHeartbeat(client, cfg.NodeID, state, cfg)
 
 		case <-configSyncTicker.C:
-			syncConfigWithPoller(client, cfg.NodeID, state, cfg, oltPoller)
+			syncConfigWithPoller(ctx, client, cfg.NodeID, state, cfg, oltPoller, cmdExecutor)
 		}
 	}
 }
@@ -956,7 +968,7 @@ func sendHeartbeat(client *agent.Client, nodeID string, state *agent.State, cfg 
 }
 
 // syncConfigWithPoller retrieves configuration from the control plane and updates the OLT poller
-func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config, oltPoller *poller.Poller) {
+func syncConfigWithPoller(ctx context.Context, client *agent.Client, nodeID string, state *agent.State, cfg *agent.Config, oltPoller *poller.Poller, cmdExecutor *command.Executor) {
 	// Get typed OLT config
 	oltConfig, err := client.GetOLTConfig(nodeID)
 	if err != nil {
@@ -965,8 +977,8 @@ func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.Stat
 	}
 
 	// Log config sync
-	fmt.Printf("[%s] Config synced (version: %d, OLTs: %d)\n",
-		time.Now().Format("15:04:05"), oltConfig.Version, len(oltConfig.OLTs))
+	fmt.Printf("[%s] Config synced (version: %d, OLTs: %d, commands: %d)\n",
+		time.Now().Format("15:04:05"), oltConfig.Version, len(oltConfig.OLTs), len(oltConfig.PendingCommands))
 
 	// Update OLT poller with new config
 	if oltPoller != nil && len(oltConfig.OLTs) > 0 {
@@ -975,15 +987,35 @@ func syncConfigWithPoller(client *agent.Client, nodeID string, state *agent.Stat
 		fmt.Printf("[%s] Updated poller with %d OLTs\n", time.Now().Format("15:04:05"), len(pollerConfigs))
 	}
 
+	// Update command executor with OLT configs
+	if cmdExecutor != nil && len(oltConfig.OLTs) > 0 {
+		cmdExecutor.UpdateOLTConfigs(oltConfig.OLTs)
+	}
+
+	// Process pending commands
+	if cmdExecutor != nil && len(oltConfig.PendingCommands) > 0 {
+		fmt.Printf("[%s] Processing %d pending commands\n", time.Now().Format("15:04:05"), len(oltConfig.PendingCommands))
+
+		// Execute commands sequentially to avoid overwhelming the OLT
+		go func(commands []agent.PendingCommand) {
+			cmdCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+
+			if err := cmdExecutor.ProcessCommands(cmdCtx, commands); err != nil {
+				fmt.Printf("[%s] Command processing error: %v\n", time.Now().Format("15:04:05"), err)
+			}
+		}(oltConfig.PendingCommands)
+	}
+
 	// Process pending probes
 	if oltPoller != nil && len(oltConfig.PendingProbes) > 0 {
 		fmt.Printf("[%s] Processing %d pending probes\n", time.Now().Format("15:04:05"), len(oltConfig.PendingProbes))
 		for _, probe := range oltConfig.PendingProbes {
 			go func(p agent.PendingProbe) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				probeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 				defer cancel()
 
-				result, err := oltPoller.TriggerDetailedPoll(ctx, p.OLTID)
+				result, err := oltPoller.TriggerDetailedPoll(probeCtx, p.OLTID)
 
 				// Acknowledge probe completion
 				ackReq := &agent.AckProbeRequest{

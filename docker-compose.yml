@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  nano-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nano-agent
+    volumes:
+      # Persist configuration and state
+      - nano-agent-config:/etc/nano-agent
+      - nano-agent-data:/var/lib/nano-agent
+    network_mode: host
+    privileged: false
+    restart: unless-stopped
+    command: ["tail", "-f", "/dev/null"]
+
+volumes:
+  nano-agent-config:
+  nano-agent-data:
