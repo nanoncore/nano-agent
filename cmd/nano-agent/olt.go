@@ -17,15 +17,17 @@ import (
 
 // OLT connection flags
 var (
-	oltVendor    string
-	oltAddress   string
-	oltPort      int
-	oltProtocol  string
-	oltUsername  string
-	oltPassword  string
-	oltTLS       bool
-	oltTLSSkipVe bool
-	outputJSON   bool
+	oltVendor      string
+	oltAddress     string
+	oltPort        int
+	oltProtocol    string
+	oltUsername    string
+	oltPassword    string
+	oltCommunity   string
+	oltSNMPVersion string
+	oltTLS         bool
+	oltTLSSkipVe   bool
+	outputJSON     bool
 )
 
 // Discover flags
@@ -318,16 +320,16 @@ func init() {
 		cmd.Flags().StringVar(&oltAddress, "address", "", "OLT management IP address [required]")
 		cmd.Flags().IntVar(&oltPort, "port", 0, "OLT management port (default based on protocol)")
 		cmd.Flags().StringVar(&oltProtocol, "protocol", "", "Management protocol (cli, netconf, gnmi, snmp)")
-		cmd.Flags().StringVar(&oltUsername, "username", "", "OLT username [required]")
-		cmd.Flags().StringVar(&oltPassword, "password", "", "OLT password [required]")
+		cmd.Flags().StringVar(&oltUsername, "username", "", "OLT username (required for CLI/NETCONF)")
+		cmd.Flags().StringVar(&oltPassword, "password", "", "OLT password (required for CLI/NETCONF)")
+		cmd.Flags().StringVar(&oltCommunity, "community", "", "SNMP community string (required for SNMP)")
+		cmd.Flags().StringVar(&oltSNMPVersion, "snmp-version", "2c", "SNMP version (1, 2c, 3)")
 		cmd.Flags().BoolVar(&oltTLS, "tls", false, "Enable TLS")
 		cmd.Flags().BoolVar(&oltTLSSkipVe, "tls-skip-verify", false, "Skip TLS verification (insecure)")
 		cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 
 		cmd.MarkFlagRequired("vendor")
 		cmd.MarkFlagRequired("address")
-		cmd.MarkFlagRequired("username")
-		cmd.MarkFlagRequired("password")
 	}
 
 	// Discover-specific flags
@@ -400,6 +402,18 @@ func createOLTDriver() (types.Driver, error) {
 	vendor := types.Vendor(strings.ToLower(oltVendor))
 	protocol := types.Protocol(strings.ToLower(oltProtocol))
 
+	// Validate credentials based on protocol
+	if protocol == types.ProtocolSNMP {
+		if oltCommunity == "" {
+			return nil, fmt.Errorf("--community is required for SNMP protocol")
+		}
+	} else {
+		// CLI, NETCONF, GNMI require username/password
+		if oltUsername == "" || oltPassword == "" {
+			return nil, fmt.Errorf("--username and --password are required for %s protocol", protocol)
+		}
+	}
+
 	config := &types.EquipmentConfig{
 		Name:          "cli-session",
 		Vendor:        vendor,
@@ -408,10 +422,18 @@ func createOLTDriver() (types.Driver, error) {
 		Protocol:      protocol,
 		Username:      oltUsername,
 		Password:      oltPassword,
+		SNMPCommunity: oltCommunity,
+		SNMPVersion:   oltSNMPVersion,
 		TLSEnabled:    oltTLS,
 		TLSSkipVerify: oltTLSSkipVe,
 		Timeout:       60 * time.Second,
 		Metadata:      make(map[string]string),
+	}
+
+	// Add SNMP community to metadata for drivers that read it from there
+	if protocol == types.ProtocolSNMP {
+		config.Metadata["snmp_community"] = oltCommunity
+		config.Metadata["snmp_version"] = oltSNMPVersion
 	}
 
 	driver, err := southbound.NewDriver(vendor, protocol, config)

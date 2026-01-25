@@ -72,9 +72,9 @@ func (e *Executor) executeCommand(ctx context.Context, cmd agent.PendingCommand)
 		return e.pushError(cmd.ID, startTime, fmt.Errorf("OLT configuration not found for equipment %s", cmd.EquipmentID))
 	}
 
-	// 3. For read operations (onu_list, port_list), use southbound driver (DriverV2) for efficient SNMP-based operations
+	// 3. For read operations (onu_list, port_list, olt_status), use southbound driver (DriverV2) for efficient SNMP-based operations
 	var result map[string]interface{}
-	if cmd.Type == "onu_list" || cmd.Type == "port_list" {
+	if cmd.Type == "onu_list" || cmd.Type == "port_list" || cmd.Type == "olt_status" {
 		sbDriver, driverV2, err := e.createSouthboundDriver(ctx, oltConfig)
 		if err != nil {
 			// Fall back to CLI driver
@@ -85,6 +85,8 @@ func (e *Executor) executeCommand(ctx context.Context, cmd agent.PendingCommand)
 				result, err = e.handleONUListV2(ctx, driverV2, cmd)
 			case "port_list":
 				result, err = e.handlePortListV2(ctx, driverV2, cmd)
+			case "olt_status":
+				result, err = e.handleOLTStatusV2(ctx, driverV2, cmd)
 			}
 			_ = sbDriver.Disconnect(ctx)
 			if err != nil {
