@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/nanoncore/nano-agent/pkg/agent"
 	"github.com/nanoncore/nano-agent/pkg/southbound/cli"
@@ -28,6 +29,7 @@ func (e *Executor) handlePortList(ctx context.Context, driver cli.CLIDriver, cmd
 			"onuCount":    port.ONUCount,
 			"maxOnus":     port.MaxONUs,
 			"txPower":     port.TxPower,
+			"rxPower":     port.RxPower,
 			"description": port.Description,
 		})
 	}
@@ -60,6 +62,9 @@ func (e *Executor) handlePortListV2(ctx context.Context, driver types.DriverV2, 
 		if port.TxPowerDBm != 0 {
 			portData["txPower"] = port.TxPowerDBm
 		}
+		if port.RxPowerDBm != 0 {
+			portData["rxPower"] = port.RxPowerDBm
+		}
 
 		portList = append(portList, portData)
 	}
@@ -83,7 +88,10 @@ func (e *Executor) handlePortEnable(ctx context.Context, driver cli.CLIDriver, c
 	}
 
 	// Get pre-state
-	preInfo, _ := driver.GetPONPortInfo(ctx, slot, portNum)
+	preInfo, err := driver.GetPONPortInfo(ctx, slot, portNum)
+	if err != nil {
+		log.Printf("[command] warning: failed to capture pre-state for port enable verification: %v", err)
+	}
 	var preState map[string]interface{}
 	if preInfo != nil {
 		preState = map[string]interface{}{
@@ -99,7 +107,10 @@ func (e *Executor) handlePortEnable(ctx context.Context, driver cli.CLIDriver, c
 	}
 
 	// Verify
-	postInfo, _ := driver.GetPONPortInfo(ctx, slot, portNum)
+	postInfo, err := driver.GetPONPortInfo(ctx, slot, portNum)
+	if err != nil {
+		log.Printf("[command] warning: failed to capture post-state for port enable verification: %v", err)
+	}
 	var postState map[string]interface{}
 	verified := false
 	if postInfo != nil {
@@ -132,7 +143,10 @@ func (e *Executor) handlePortDisable(ctx context.Context, driver cli.CLIDriver, 
 	}
 
 	// Get pre-state
-	preInfo, _ := driver.GetPONPortInfo(ctx, slot, portNum)
+	preInfo, err := driver.GetPONPortInfo(ctx, slot, portNum)
+	if err != nil {
+		log.Printf("[command] warning: failed to capture pre-state for port disable verification: %v", err)
+	}
 	var preState map[string]interface{}
 	if preInfo != nil {
 		preState = map[string]interface{}{
@@ -149,7 +163,10 @@ func (e *Executor) handlePortDisable(ctx context.Context, driver cli.CLIDriver, 
 	}
 
 	// Verify
-	postInfo, _ := driver.GetPONPortInfo(ctx, slot, portNum)
+	postInfo, err := driver.GetPONPortInfo(ctx, slot, portNum)
+	if err != nil {
+		log.Printf("[command] warning: failed to capture post-state for port disable verification: %v", err)
+	}
 	var postState map[string]interface{}
 	verified := false
 	if postInfo != nil {
@@ -191,6 +208,7 @@ func (e *Executor) handlePortPower(ctx context.Context, driver cli.CLIDriver, cm
 		"port": port,
 		"power": map[string]interface{}{
 			"txPower": portInfo.TxPower,
+			"rxPower": portInfo.RxPower,
 		},
 		"status":      portInfo.Status,
 		"adminStatus": portInfo.AdminStatus,
