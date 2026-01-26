@@ -98,6 +98,37 @@ func (e *Executor) executeCommand(ctx context.Context, cmd agent.PendingCommand)
 		}
 	}
 
+	// 4. For provisioning commands, use CLI for execution + SNMP for verification
+	if isProvisioningCommand(cmd.Type) {
+		// Create CLI driver for command execution
+		driver, err := e.createDriver(oltConfig)
+		if err != nil {
+			return e.pushError(cmd.ID, startTime, fmt.Errorf("failed to create driver: %w", err))
+		}
+
+		if err := driver.Connect(ctx); err != nil {
+			return e.pushError(cmd.ID, startTime, fmt.Errorf("failed to connect to OLT: %w", err))
+		}
+		defer driver.Close()
+
+		// Create DriverV2 for SNMP-based verification (best effort)
+		var driverV2 types.DriverV2
+		sbDriver, dv2, err := e.createSouthboundDriver(ctx, oltConfig)
+		if err != nil {
+			log.Printf("[command] SNMP driver unavailable for verification, will use CLI only: %v", err)
+		} else {
+			driverV2 = dv2
+			defer sbDriver.Disconnect(ctx)
+		}
+
+		// Execute provisioning command with SNMP verification capability
+		result, err = e.dispatchProvisioning(ctx, driver, driverV2, cmd)
+		if err != nil {
+			return e.pushError(cmd.ID, startTime, err)
+		}
+		goto pushResult
+	}
+
 	// Create CLI driver and connect for other commands (or onu_list fallback)
 	{
 		driver, err := e.createDriver(oltConfig)
@@ -110,7 +141,7 @@ func (e *Executor) executeCommand(ctx context.Context, cmd agent.PendingCommand)
 		}
 		defer driver.Close()
 
-		// 4. Execute the command based on type
+		// 5. Execute the command based on type
 		result, err = e.dispatch(ctx, driver, cmd)
 		if err != nil {
 			return e.pushError(cmd.ID, startTime, err)
@@ -271,10 +302,13 @@ func (e *Executor) handleONUListV2(ctx context.Context, driver types.DriverV2, c
 			continue
 		}
 
-		// Determine status from IsOnline and OperState
+		// Determine status from IsOnline, AdminState, and OperState
+		// Bug fix: Check for suspended status when AdminState is disabled or OperState is suspended
 		status := "offline"
 		if onu.IsOnline {
 			status = "online"
+		} else if onu.AdminState == "disabled" || onu.OperState == "suspended" {
+			status = "suspended"
 		} else if onu.OperState == "los" {
 			status = "los"
 		} else if onu.OperState == "discovered" {
@@ -371,5 +405,38 @@ func (e *Executor) dispatch(ctx context.Context, driver cli.CLIDriver, cmd agent
 
 	default:
 		return nil, fmt.Errorf("unsupported command type: %s", cmd.Type)
+	}
+}
+
+// isProvisioningCommand returns true if the command type is a provisioning operation
+// that benefits from SNMP-based verification after CLI execution.
+func isProvisioningCommand(cmdType string) bool {
+	switch cmdType {
+	case "onu_suspend", "onu_resume", "onu_provision", "onu_delete", "onu_update", "onu_reboot":
+		return true
+	default:
+		return false
+	}
+}
+
+// dispatchProvisioning routes provisioning commands to handlers that support SNMP verification.
+// These handlers use CLI for command execution and SNMP (via driverV2) for verification.
+func (e *Executor) dispatchProvisioning(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	switch cmd.Type {
+	case "onu_suspend":
+		return e.handleONUSuspendWithVerification(ctx, driver, driverV2, cmd)
+	case "onu_resume":
+		return e.handleONUResumeWithVerification(ctx, driver, driverV2, cmd)
+	case "onu_provision":
+		return e.handleONUProvisionWithVerification(ctx, driver, driverV2, cmd)
+	case "onu_delete":
+		return e.handleONUDeleteWithVerification(ctx, driver, driverV2, cmd)
+	case "onu_update":
+		return e.handleONUUpdateWithVerification(ctx, driver, driverV2, cmd)
+	case "onu_reboot":
+		return e.handleONURebootWithVerification(ctx, driver, driverV2, cmd)
+	default:
+		// Fallback to regular dispatch without SNMP verification
+		return e.dispatch(ctx, driver, cmd)
 	}
 }

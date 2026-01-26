@@ -880,6 +880,12 @@ func (c *Client) PushONUs(oltID string, onus []ONUData) (*PushONUsResponse, erro
 	return &pushResp, nil
 }
 
+// PushSingleONU pushes a single ONU update immediately after command execution.
+// This is a convenience wrapper around PushONUs for immediate post-command updates.
+func (c *Client) PushSingleONU(oltID string, onu ONUData) (*PushONUsResponse, error) {
+	return c.PushONUs(oltID, []ONUData{onu})
+}
+
 // TelemetryData represents telemetry data to be pushed to the control plane.
 type TelemetryData struct {
 	CPUPercent    float64 `json:"cpuPercent,omitempty"`

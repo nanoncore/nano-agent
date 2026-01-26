@@ -451,6 +451,9 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		status := "offline"
 		if onu.IsOnline {
 			status = "online"
+		} else if onu.AdminState == "disabled" || onu.OperState == "suspended" {
+			// ONU is administratively suspended
+			status = "suspended"
 		} else if onu.OperState == "los" {
 			status = "los"
 		} else if onu.OperState == "discovered" {

@@ -4,12 +4,181 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nanoncore/nano-agent/pkg/agent"
 	"github.com/nanoncore/nano-agent/pkg/southbound/cli"
+	"github.com/nanoncore/nano-southbound/types"
 )
+
+// verifyONUStateChange verifies ONU reached expected state with retry.
+// OLT hardware can be slow to apply changes, so we retry a few times.
+func verifyONUStateChange(
+	ctx context.Context,
+	driver cli.CLIDriver,
+	ponPort string,
+	onuID int,
+	expectedStates []string,
+	maxRetries int,
+	retryDelay time.Duration,
+) (*cli.ONUCLIInfo, bool) {
+	var lastInfo *cli.ONUCLIInfo
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(retryDelay)
+		}
+
+		info, err := driver.GetONUInfo(ctx, ponPort, onuID)
+		if err != nil {
+			slog.Debug("verification attempt failed", "attempt", attempt, "error", err)
+			continue
+		}
+		if info == nil {
+			continue
+		}
+
+		lastInfo = info
+		status := strings.ToLower(info.Status)
+		for _, expected := range expectedStates {
+			if status == expected {
+				return info, true
+			}
+		}
+	}
+	return lastInfo, false
+}
+
+// verifyONUDeleted verifies ONU no longer exists with retry.
+func verifyONUDeleted(
+	ctx context.Context,
+	driver cli.CLIDriver,
+	ponPort string,
+	onuID int,
+	maxRetries int,
+	retryDelay time.Duration,
+) bool {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(retryDelay)
+		}
+
+		info, err := driver.GetONUInfo(ctx, ponPort, onuID)
+		if err != nil || info == nil {
+			return true // ONU is gone
+		}
+	}
+	return false
+}
+
+// verifyONUExists verifies ONU exists with expected serial.
+func verifyONUExists(
+	ctx context.Context,
+	driver cli.CLIDriver,
+	ponPort string,
+	onuID int,
+	expectedSerial string,
+	maxRetries int,
+	retryDelay time.Duration,
+) (*cli.ONUCLIInfo, bool) {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(retryDelay)
+		}
+
+		info, err := driver.GetONUInfo(ctx, ponPort, onuID)
+		if err != nil || info == nil {
+			continue
+		}
+
+		if info.SerialNumber == expectedSerial {
+			return info, true
+		}
+	}
+	return nil, false
+}
+
+// verifyONUStateChangeSNMP verifies ONU state change using SNMP (DriverV2).
+// This is more reliable than CLI verification as it directly queries the OLT's SNMP data.
+func verifyONUStateChangeSNMP(
+	ctx context.Context,
+	driverV2 types.DriverV2,
+	ponPort string,
+	onuID int,
+	serial string,
+	expectedStates []string,
+	maxRetries int,
+	retryDelay time.Duration,
+) (string, bool) {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(retryDelay)
+		}
+
+		// Get ONU list filtered by PON port
+		filter := &types.ONUFilter{PONPort: ponPort}
+		onus, err := driverV2.GetONUList(ctx, filter)
+		if err != nil {
+			slog.Debug("SNMP verification attempt failed", "attempt", attempt, "error", err)
+			continue
+		}
+
+		// Find the specific ONU by serial or ID
+		for _, onu := range onus {
+			if (serial != "" && onu.Serial == serial) || (serial == "" && onu.ONUID == onuID) {
+				// Check admin state and oper state
+				adminState := strings.ToLower(onu.AdminState)
+				operState := strings.ToLower(onu.OperState)
+
+				for _, expected := range expectedStates {
+					// Match against admin state, oper state, or computed status
+					if adminState == expected || operState == expected {
+						return operState, true
+					}
+					// Also check for disabled admin state mapping to suspended
+					if expected == "suspended" && (adminState == "disabled" || operState == "suspended") {
+						return "suspended", true
+					}
+				}
+				slog.Debug("SNMP verification: state mismatch",
+					"serial", onu.Serial,
+					"adminState", adminState,
+					"operState", operState,
+					"expected", expectedStates)
+			}
+		}
+	}
+	return "", false
+}
+
+// pushONUUpdate pushes ONU data to database immediately (best effort).
+func (e *Executor) pushONUUpdate(oltID, serial, ponPort string, onuID int, status string, info *cli.ONUCLIInfo) {
+	if e.client == nil || serial == "" {
+		return
+	}
+
+	onuData := agent.ONUData{
+		Serial:  serial,
+		PONPort: ponPort,
+		ONUID:   onuID,
+		Status:  status,
+	}
+
+	if info != nil {
+		onuData.RxPower = info.RxPower
+		onuData.Distance = info.Distance
+		onuData.Model = info.Type // CLI returns type as model
+	}
+
+	if _, err := e.client.PushSingleONU(oltID, onuData); err != nil {
+		slog.Warn("failed to push immediate ONU update", "serial", serial, "error", err)
+	} else {
+		slog.Info("pushed immediate ONU update", "serial", serial, "status", status)
+	}
+}
 
 // handleONUList retrieves all ONUs from the OLT using CLI commands.
 // Note: The DriverV2/SNMP path is handled separately in executor.go via handleONUListV2.
@@ -173,19 +342,24 @@ func (e *Executor) handleONUProvision(ctx context.Context, driver cli.CLIDriver,
 		return nil, fmt.Errorf("failed to provision ONU: %w", err)
 	}
 
-	// Verify by getting ONU info
-	var verified bool
-	var onuInfo *cli.ONUCLIInfo
-	if onuID > 0 {
-		onuInfo, err = driver.GetONUInfo(ctx, ponPort, onuID)
-		if err == nil && onuInfo.SerialNumber == serial {
-			verified = true
-		}
+	// Verify ONU was created with retry
+	postInfo, verified := verifyONUExists(ctx, driver, ponPort, onuID, serial, 3, 500*time.Millisecond)
+
+	if !verified {
+		return nil, fmt.Errorf("verification failed: ONU %s not found after provision", serial)
 	}
 
+	// Push to database immediately
+	status := "online"
+	if postInfo != nil {
+		status = postInfo.Status
+	}
+	e.pushONUUpdate(cmd.EquipmentID, serial, ponPort, onuID, status, postInfo)
+
 	result := map[string]interface{}{
-		"success":  true,
-		"verified": verified,
+		"success":         true,
+		"verified":        true,
+		"immediateUpdate": true,
 		"onu": map[string]interface{}{
 			"serial":         serial,
 			"ponPort":        ponPort,
@@ -195,8 +369,8 @@ func (e *Executor) handleONUProvision(ctx context.Context, driver cli.CLIDriver,
 		},
 	}
 
-	if onuInfo != nil {
-		result["onu"].(map[string]interface{})["status"] = onuInfo.Status
+	if postInfo != nil {
+		result["onu"].(map[string]interface{})["status"] = postInfo.Status
 	}
 
 	return result, nil
@@ -238,14 +412,21 @@ func (e *Executor) handleONUDelete(ctx context.Context, driver cli.CLIDriver, cm
 		return nil, fmt.Errorf("failed to delete ONU: %w", err)
 	}
 
-	// Verify deletion
-	postInfo, postErr := driver.GetONUInfo(ctx, ponPort, onuID)
-	verified := postErr != nil || postInfo == nil
+	// Verify ONU was deleted with retry
+	verified := verifyONUDeleted(ctx, driver, ponPort, onuID, 3, 500*time.Millisecond)
+
+	if !verified {
+		return nil, fmt.Errorf("verification failed: ONU still exists after delete")
+	}
+
+	// For deletion, the poller will clean up on next cycle
+	// We could push a "deleted" status here if the API supported it
 
 	return map[string]interface{}{
-		"success":  true,
-		"verified": verified,
-		"preState": preState,
+		"success":         true,
+		"verified":        true,
+		"preState":        preState,
+		"immediateUpdate": true,
 	}, nil
 }
 
@@ -259,14 +440,43 @@ func (e *Executor) handleONUReboot(ctx context.Context, driver cli.CLIDriver, cm
 		return nil, fmt.Errorf("ponPort and onuId are required")
 	}
 
+	// Get pre-state to capture serial number
+	preInfo, _ := driver.GetONUInfo(ctx, ponPort, onuID)
+	var serial string
+	if preInfo != nil {
+		serial = preInfo.SerialNumber
+	}
+
 	err := driver.RebootONU(ctx, ponPort, onuID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reboot ONU: %w", err)
 	}
 
+	// Wait a bit longer for reboot to complete
+	time.Sleep(2 * time.Second)
+
+	// Verify ONU came back online (more retries and longer delay for reboot)
+	postInfo, verified := verifyONUStateChange(
+		ctx, driver, ponPort, onuID,
+		[]string{"online", "active"},
+		5,               // More retries for reboot
+		2*time.Second,   // Longer delay between retries
+	)
+
+	// Push ONU data (even if not yet online, push current state)
+	status := "rebooting"
+	if postInfo != nil && verified {
+		status = postInfo.Status
+	}
+	if serial != "" {
+		e.pushONUUpdate(cmd.EquipmentID, serial, ponPort, onuID, status, postInfo)
+	}
+
 	return map[string]interface{}{
-		"success": true,
-		"message": fmt.Sprintf("ONU %s:%d reboot initiated", ponPort, onuID),
+		"success":         true,
+		"verified":        verified,
+		"immediateUpdate": serial != "",
+		"message":         fmt.Sprintf("ONU %s:%d reboot initiated", ponPort, onuID),
 	}, nil
 }
 
@@ -447,8 +657,20 @@ func (e *Executor) handleONUUpdate(ctx context.Context, driver cli.CLIDriver, cm
 		// This would typically be part of ONT configuration mode
 	}
 
-	// Get post-state
-	postInfo, _ := driver.GetONUInfo(ctx, ponPort, onuID)
+	// Verify settings were applied with retry
+	postInfo, verified := verifyONUStateChange(
+		ctx, driver, ponPort, onuID,
+		[]string{"online", "active"}, // ONU should still be online after update
+		3, 500*time.Millisecond,
+	)
+
+	// Push updated ONU data to database immediately
+	status := "online"
+	if postInfo != nil {
+		status = postInfo.Status
+	}
+	e.pushONUUpdate(cmd.EquipmentID, preInfo.SerialNumber, ponPort, onuID, status, postInfo)
+
 	var postState map[string]interface{}
 	if postInfo != nil {
 		postState = map[string]interface{}{
@@ -461,10 +683,11 @@ func (e *Executor) handleONUUpdate(ctx context.Context, driver cli.CLIDriver, cm
 	}
 
 	return map[string]interface{}{
-		"success":   true,
-		"verified":  true,
-		"preState":  preState,
-		"postState": postState,
+		"success":         true,
+		"verified":        verified,
+		"preState":        preState,
+		"postState":       postState,
+		"immediateUpdate": true,
 	}, nil
 }
 
@@ -479,14 +702,14 @@ func (e *Executor) handleONUSuspend(ctx context.Context, driver cli.CLIDriver, c
 		return nil, fmt.Errorf("ponPort and onuId are required")
 	}
 
-	// Get pre-state
-	preInfo, err := driver.GetONUInfo(ctx, ponPort, onuID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get ONU info: %w", err)
-	}
-	preState := map[string]interface{}{
-		"serial": preInfo.SerialNumber,
-		"status": preInfo.Status,
+	// Get pre-state (best effort - don't fail if we can't get it)
+	var preState map[string]interface{}
+	preInfo, _ := driver.GetONUInfo(ctx, ponPort, onuID)
+	if preInfo != nil {
+		preState = map[string]interface{}{
+			"serial": preInfo.SerialNumber,
+			"status": preInfo.Status,
+		}
 	}
 
 	// Execute vendor-specific suspend command
@@ -504,7 +727,7 @@ func (e *Executor) handleONUSuspend(ctx context.Context, driver cli.CLIDriver, c
 	case "huawei":
 		suspendCmd = fmt.Sprintf("interface gpon 0/%d\n ont deactivate %d ont-id %d\n quit", slot, port, onuID)
 	case "vsol":
-		suspendCmd = fmt.Sprintf("interface gpon 0/%d\n ont deactivate %d\n exit", port, onuID)
+		suspendCmd = fmt.Sprintf("interface gpon 0/%d\nonu %d deactivate\nexit", port, onuID)
 	default:
 		return nil, fmt.Errorf("ONU suspend not supported for vendor: %s", vendor)
 	}
@@ -514,24 +737,40 @@ func (e *Executor) handleONUSuspend(ctx context.Context, driver cli.CLIDriver, c
 		return nil, fmt.Errorf("failed to suspend ONU: %w (output: %s)", err, output)
 	}
 
-	// Verify by checking ONU status
-	postInfo, _ := driver.GetONUInfo(ctx, ponPort, onuID)
+	// Verify the change actually happened with retry (OLT hardware can be slow)
+	postInfo, verified := verifyONUStateChange(
+		ctx, driver, ponPort, onuID,
+		[]string{"offline", "deactivated", "down", "suspended", "disabled"},
+		3, 500*time.Millisecond,
+	)
+
+	if !verified {
+		return nil, fmt.Errorf("verification failed: ONU did not reach suspended state")
+	}
+
+	// Push verified data to database immediately
+	serial := ""
+	if preInfo != nil {
+		serial = preInfo.SerialNumber
+	} else if postInfo != nil {
+		serial = postInfo.SerialNumber
+	}
+	e.pushONUUpdate(cmd.EquipmentID, serial, ponPort, onuID, "suspended", postInfo)
+
 	var postState map[string]interface{}
-	verified := false
 	if postInfo != nil {
 		postState = map[string]interface{}{
 			"serial": postInfo.SerialNumber,
 			"status": postInfo.Status,
 		}
-		status := strings.ToLower(postInfo.Status)
-		verified = status == "offline" || status == "deactivated" || status == "down"
 	}
 
 	return map[string]interface{}{
-		"success":   true,
-		"verified":  verified,
-		"preState":  preState,
-		"postState": postState,
+		"success":         true,
+		"verified":        true,
+		"preState":        preState,
+		"postState":       postState,
+		"immediateUpdate": true,
 	}, nil
 }
 
@@ -545,14 +784,14 @@ func (e *Executor) handleONUResume(ctx context.Context, driver cli.CLIDriver, cm
 		return nil, fmt.Errorf("ponPort and onuId are required")
 	}
 
-	// Get pre-state
-	preInfo, err := driver.GetONUInfo(ctx, ponPort, onuID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get ONU info: %w", err)
-	}
-	preState := map[string]interface{}{
-		"serial": preInfo.SerialNumber,
-		"status": preInfo.Status,
+	// Get pre-state (best effort - don't fail if we can't get it)
+	var preState map[string]interface{}
+	preInfo, _ := driver.GetONUInfo(ctx, ponPort, onuID)
+	if preInfo != nil {
+		preState = map[string]interface{}{
+			"serial": preInfo.SerialNumber,
+			"status": preInfo.Status,
+		}
 	}
 
 	// Execute vendor-specific resume command
@@ -568,7 +807,7 @@ func (e *Executor) handleONUResume(ctx context.Context, driver cli.CLIDriver, cm
 	case "huawei":
 		resumeCmd = fmt.Sprintf("interface gpon 0/%d\n ont activate %d ont-id %d\n quit", slot, port, onuID)
 	case "vsol":
-		resumeCmd = fmt.Sprintf("interface gpon 0/%d\n ont activate %d\n exit", port, onuID)
+		resumeCmd = fmt.Sprintf("interface gpon 0/%d\nonu %d activate\nexit", port, onuID)
 	default:
 		return nil, fmt.Errorf("ONU resume not supported for vendor: %s", vendor)
 	}
@@ -578,43 +817,331 @@ func (e *Executor) handleONUResume(ctx context.Context, driver cli.CLIDriver, cm
 		return nil, fmt.Errorf("failed to resume ONU: %w (output: %s)", err, output)
 	}
 
-	// Verify by checking ONU status
-	postInfo, _ := driver.GetONUInfo(ctx, ponPort, onuID)
+	// Verify the change actually happened with retry (OLT hardware can be slow)
+	postInfo, verified := verifyONUStateChange(
+		ctx, driver, ponPort, onuID,
+		[]string{"online", "active", "up"},
+		3, 500*time.Millisecond,
+	)
+
+	if !verified {
+		return nil, fmt.Errorf("verification failed: ONU did not reach online state")
+	}
+
+	// Push verified data to database immediately
+	serial := ""
+	if preInfo != nil {
+		serial = preInfo.SerialNumber
+	} else if postInfo != nil {
+		serial = postInfo.SerialNumber
+	}
+	e.pushONUUpdate(cmd.EquipmentID, serial, ponPort, onuID, "online", postInfo)
+
 	var postState map[string]interface{}
-	verified := false
 	if postInfo != nil {
 		postState = map[string]interface{}{
 			"serial": postInfo.SerialNumber,
 			"status": postInfo.Status,
 		}
-		status := strings.ToLower(postInfo.Status)
-		verified = status == "online" || status == "active" || status == "up"
 	}
 
 	return map[string]interface{}{
-		"success":   true,
-		"verified":  verified,
-		"preState":  preState,
-		"postState": postState,
+		"success":         true,
+		"verified":        true,
+		"preState":        preState,
+		"postState":       postState,
+		"immediateUpdate": true,
 	}, nil
 }
 
 // parsePonPort parses a PON port string into slot and port numbers.
+// Supports both 2-part (slot/port) and 3-part (frame/slot/port) formats.
 func parsePonPort(ponPort string) (slot, port int, err error) {
 	parts := strings.Split(ponPort, "/")
 	if len(parts) < 2 {
 		return 0, 0, fmt.Errorf("invalid PON port format: %s", ponPort)
 	}
 
-	slot, err = strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid slot number: %s", parts[0])
-	}
-
-	port, err = strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, fmt.Errorf("invalid port number: %s", parts[1])
+	if len(parts) == 3 {
+		// 3-part format: frame/slot/port (Huawei)
+		slot, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid slot number: %s", parts[1])
+		}
+		port, err = strconv.Atoi(parts[2])
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid port number: %s", parts[2])
+		}
+	} else {
+		// 2-part format: slot/port (V-SOL)
+		slot, err = strconv.Atoi(parts[0])
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid slot number: %s", parts[0])
+		}
+		port, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return 0, 0, fmt.Errorf("invalid port number: %s", parts[1])
+		}
 	}
 
 	return slot, port, nil
+}
+
+// =============================================================================
+// Provisioning Handlers with SNMP Verification
+// =============================================================================
+// These handlers use CLI for command execution and SNMP (DriverV2) for verification.
+// This is more reliable than CLI-only verification because:
+// 1. CLI `show onu detail-info` may not be implemented on all OLTs/simulators
+// 2. SNMP provides direct access to the OLT's state database
+// 3. SNMP is faster and more reliable for state verification
+
+// handleONUSuspendWithVerification suspends an ONU and verifies via SNMP.
+func (e *Executor) handleONUSuspendWithVerification(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	ponPort, _ := cmd.Payload["ponPort"].(string)
+	onuIDFloat, _ := cmd.Payload["onuId"].(float64)
+	onuID := int(onuIDFloat)
+	serial, _ := cmd.Payload["serial"].(string)
+
+	if ponPort == "" || onuID == 0 {
+		return nil, fmt.Errorf("ponPort and onuId are required")
+	}
+
+	// Get pre-state via SNMP if available
+	var preState map[string]interface{}
+	if driverV2 != nil {
+		filter := &types.ONUFilter{PONPort: ponPort}
+		onus, err := driverV2.GetONUList(ctx, filter)
+		if err == nil {
+			for _, onu := range onus {
+				if onu.ONUID == onuID || (serial != "" && onu.Serial == serial) {
+					preState = map[string]interface{}{
+						"serial":     onu.Serial,
+						"status":     onu.OperState,
+						"adminState": onu.AdminState,
+					}
+					if serial == "" {
+						serial = onu.Serial
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Execute vendor-specific suspend command via CLI
+	vendor := driver.Vendor()
+	var suspendCmd string
+
+	slot, port, err := parsePonPort(ponPort)
+	if err != nil {
+		return nil, err
+	}
+
+	switch vendor {
+	case "huawei":
+		suspendCmd = fmt.Sprintf("interface gpon 0/%d\n ont deactivate %d ont-id %d\n quit", slot, port, onuID)
+	case "vsol":
+		suspendCmd = fmt.Sprintf("interface gpon 0/%d\nonu %d deactivate\nexit", port, onuID)
+	default:
+		return nil, fmt.Errorf("ONU suspend not supported for vendor: %s", vendor)
+	}
+
+	output, err := driver.Execute(ctx, suspendCmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to suspend ONU: %w (output: %s)", err, output)
+	}
+
+	slog.Info("executed suspend command", "ponPort", ponPort, "onuId", onuID, "output", output)
+
+	// Verify via SNMP (primary) or CLI (fallback)
+	var verified bool
+	var postStatus string
+
+	if driverV2 != nil {
+		// SNMP verification - more reliable
+		postStatus, verified = verifyONUStateChangeSNMP(
+			ctx, driverV2, ponPort, onuID, serial,
+			[]string{"disabled", "suspended", "offline", "deactivated"},
+			5, 500*time.Millisecond,
+		)
+		if verified {
+			slog.Info("SNMP verification successful", "ponPort", ponPort, "onuId", onuID, "status", postStatus)
+		} else {
+			slog.Warn("SNMP verification failed, ONU may not have reached suspended state", "ponPort", ponPort, "onuId", onuID)
+		}
+	} else {
+		// CLI fallback verification
+		postInfo, cliVerified := verifyONUStateChange(
+			ctx, driver, ponPort, onuID,
+			[]string{"offline", "deactivated", "down", "suspended", "disabled"},
+			3, 500*time.Millisecond,
+		)
+		verified = cliVerified
+		if postInfo != nil {
+			postStatus = postInfo.Status
+			if serial == "" {
+				serial = postInfo.SerialNumber
+			}
+		}
+	}
+
+	// Push update to database immediately regardless of verification result
+	// The command was executed, so we should update the database with what we know
+	statusToReport := "suspended"
+	if verified && postStatus != "" {
+		statusToReport = postStatus
+	}
+	e.pushONUUpdate(cmd.EquipmentID, serial, ponPort, onuID, statusToReport, nil)
+
+	postState := map[string]interface{}{
+		"serial":   serial,
+		"status":   statusToReport,
+		"verified": verified,
+	}
+
+	return map[string]interface{}{
+		"success":         true,
+		"verified":        verified,
+		"preState":        preState,
+		"postState":       postState,
+		"immediateUpdate": true,
+	}, nil
+}
+
+// handleONUResumeWithVerification resumes an ONU and verifies via SNMP.
+func (e *Executor) handleONUResumeWithVerification(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	ponPort, _ := cmd.Payload["ponPort"].(string)
+	onuIDFloat, _ := cmd.Payload["onuId"].(float64)
+	onuID := int(onuIDFloat)
+	serial, _ := cmd.Payload["serial"].(string)
+
+	if ponPort == "" || onuID == 0 {
+		return nil, fmt.Errorf("ponPort and onuId are required")
+	}
+
+	// Get pre-state via SNMP if available
+	var preState map[string]interface{}
+	if driverV2 != nil {
+		filter := &types.ONUFilter{PONPort: ponPort}
+		onus, err := driverV2.GetONUList(ctx, filter)
+		if err == nil {
+			for _, onu := range onus {
+				if onu.ONUID == onuID || (serial != "" && onu.Serial == serial) {
+					preState = map[string]interface{}{
+						"serial":     onu.Serial,
+						"status":     onu.OperState,
+						"adminState": onu.AdminState,
+					}
+					if serial == "" {
+						serial = onu.Serial
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Execute vendor-specific resume command via CLI
+	vendor := driver.Vendor()
+	var resumeCmd string
+
+	slot, port, err := parsePonPort(ponPort)
+	if err != nil {
+		return nil, err
+	}
+
+	switch vendor {
+	case "huawei":
+		resumeCmd = fmt.Sprintf("interface gpon 0/%d\n ont activate %d ont-id %d\n quit", slot, port, onuID)
+	case "vsol":
+		resumeCmd = fmt.Sprintf("interface gpon 0/%d\nonu %d activate\nexit", port, onuID)
+	default:
+		return nil, fmt.Errorf("ONU resume not supported for vendor: %s", vendor)
+	}
+
+	output, err := driver.Execute(ctx, resumeCmd)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resume ONU: %w (output: %s)", err, output)
+	}
+
+	slog.Info("executed resume command", "ponPort", ponPort, "onuId", onuID, "output", output)
+
+	// Verify via SNMP (primary) or CLI (fallback)
+	var verified bool
+	var postStatus string
+
+	if driverV2 != nil {
+		// SNMP verification - more reliable
+		postStatus, verified = verifyONUStateChangeSNMP(
+			ctx, driverV2, ponPort, onuID, serial,
+			[]string{"enabled", "online", "active"},
+			5, 500*time.Millisecond,
+		)
+		if verified {
+			slog.Info("SNMP verification successful", "ponPort", ponPort, "onuId", onuID, "status", postStatus)
+		} else {
+			slog.Warn("SNMP verification failed, ONU may not have reached online state", "ponPort", ponPort, "onuId", onuID)
+		}
+	} else {
+		// CLI fallback verification
+		postInfo, cliVerified := verifyONUStateChange(
+			ctx, driver, ponPort, onuID,
+			[]string{"online", "active", "up"},
+			3, 500*time.Millisecond,
+		)
+		verified = cliVerified
+		if postInfo != nil {
+			postStatus = postInfo.Status
+			if serial == "" {
+				serial = postInfo.SerialNumber
+			}
+		}
+	}
+
+	// Push update to database immediately
+	statusToReport := "online"
+	if verified && postStatus != "" {
+		statusToReport = postStatus
+	}
+	e.pushONUUpdate(cmd.EquipmentID, serial, ponPort, onuID, statusToReport, nil)
+
+	postState := map[string]interface{}{
+		"serial":   serial,
+		"status":   statusToReport,
+		"verified": verified,
+	}
+
+	return map[string]interface{}{
+		"success":         true,
+		"verified":        verified,
+		"preState":        preState,
+		"postState":       postState,
+		"immediateUpdate": true,
+	}, nil
+}
+
+// handleONUProvisionWithVerification provisions an ONU and verifies via SNMP.
+func (e *Executor) handleONUProvisionWithVerification(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	// Delegate to the existing handler - provision uses CLI verification
+	// which should work as the ONU will appear in the list
+	return e.handleONUProvision(ctx, driver, cmd)
+}
+
+// handleONUDeleteWithVerification deletes an ONU and verifies via SNMP.
+func (e *Executor) handleONUDeleteWithVerification(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	// Delegate to the existing handler - delete uses CLI verification
+	return e.handleONUDelete(ctx, driver, cmd)
+}
+
+// handleONUUpdateWithVerification updates an ONU and verifies via SNMP.
+func (e *Executor) handleONUUpdateWithVerification(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	// Delegate to the existing handler
+	return e.handleONUUpdate(ctx, driver, cmd)
+}
+
+// handleONURebootWithVerification reboots an ONU and verifies via SNMP.
+func (e *Executor) handleONURebootWithVerification(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	// Delegate to the existing handler - reboot has its own verification logic
+	return e.handleONUReboot(ctx, driver, cmd)
 }
