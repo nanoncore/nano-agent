@@ -66,7 +66,7 @@ type AgentConfig struct {
 type ONUData struct {
 	Serial          string  `json:"serialNumber"`
 	PONPort         string  `json:"ponPort"`
-	ONUID           int     `json:"onuId,omitempty"`
+	ONUID           int     `json:"onuId"`
 	Status          string  `json:"status"`
 	Distance        int     `json:"distance,omitempty"`
 	RxPower         float64 `json:"rxPower,omitempty"`

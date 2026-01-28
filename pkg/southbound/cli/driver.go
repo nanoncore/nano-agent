@@ -29,6 +29,15 @@ type CLIDriver interface {
 	Vendor() string
 
 	// ==========================================================================
+	// Capability Detection
+	// ==========================================================================
+
+	// GetCapabilities returns the feature support matrix for this driver.
+	// This enables runtime capability detection for graceful degradation
+	// when features aren't supported by specific OLT vendors or models.
+	GetCapabilities() *VendorCapabilities
+
+	// ==========================================================================
 	// ONU Provisioning
 	// ==========================================================================
 
@@ -289,4 +298,35 @@ func (d *BaseCLIDriver) IsConnected() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.client != nil && d.expectSession != nil
+}
+
+// ExecuteEnableWithPassword handles the enable command with password prompt.
+// This is useful for vendors like V-SOL that require a password after enable.
+func (d *BaseCLIDriver) ExecuteEnableWithPassword(ctx context.Context, password string) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.expectSession == nil {
+		return "", fmt.Errorf("not connected")
+	}
+
+	output, err := d.expectSession.ExecuteEnableWithPassword(password)
+	if err != nil {
+		return output, fmt.Errorf("enable with password failed: %w", err)
+	}
+
+	return strings.TrimSpace(output), nil
+}
+
+// DisablePager disables the CLI pager (terminal length 0 or equivalent).
+// This is useful for vendors that require privileged mode before pager can be disabled.
+func (d *BaseCLIDriver) DisablePager() error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.expectSession == nil {
+		return fmt.Errorf("not connected")
+	}
+
+	return d.expectSession.DisablePager()
 }

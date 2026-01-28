@@ -17,12 +17,13 @@ import (
 var DefaultPromptPattern = regexp.MustCompile(`(?m)[\w\-\[\]()]+[#>]\s*$`)
 
 // VendorPrompts contains vendor-specific prompt patterns
+// V-SOL uses Cisco-style prompts with optional mode indicators: hostname>, hostname#, hostname(config)#
 var VendorPrompts = map[string]*regexp.Regexp{
-	"huawei": regexp.MustCompile(`(?m)(<[\w\-]+>|\[[\w\-~]+\])\s*$`),
-	"vsol":   regexp.MustCompile(`(?m)[\w\-]+[#>]\s*$`),
-	"cdata":  regexp.MustCompile(`(?m)[\w\-]+[#>]\s*$`),
+	"huawei": regexp.MustCompile(`(?m)(<[\w\-]+>|\[[\w\-~/]+\])\s*$`),
+	"vsol":   regexp.MustCompile(`(?m)[\w\-]+(\([\w\-/]+\))?[#>]\s*$`),
+	"cdata":  regexp.MustCompile(`(?m)[\w\-]+(\([\w\-/]+\))?[#>]\s*$`),
 	"zte":    regexp.MustCompile(`(?m)(<[\w\-]+>|\[[\w\-~]+\])\s*$`),
-	"cisco":  regexp.MustCompile(`(?m)[\w\-]+[#>]\s*$`),
+	"cisco":  regexp.MustCompile(`(?m)[\w\-]+(\([\w\-/]+\))?[#>]\s*$`),
 }
 
 // PagerDisableCommands contains commands to disable paging per vendor
@@ -32,6 +33,17 @@ var PagerDisableCommands = map[string]string{
 	"cdata":  "terminal length 0",
 	"zte":    "screen-length 0 temporary",
 	"cisco":  "terminal length 0",
+}
+
+// CLIErrorPatterns contains common CLI error patterns that indicate command failure
+var CLIErrorPatterns = []string{
+	"command not found",
+	"% unknown command",
+	"% invalid",
+	"% incomplete command",
+	"syntax error",
+	"unrecognized command",
+	"bad command",
 }
 
 // ExpectSession wraps google/goexpect for network equipment CLI interaction
@@ -137,12 +149,24 @@ func NewExpectSession(cfg ExpectSessionConfig) (*ExpectSession, error) {
 	}
 
 	// Disable pager if requested (non-fatal if it fails)
-	if cfg.DisablePager {
+	// Skip for vendors that require privileged mode first (e.g., V-SOL)
+	// Those vendors should call DisablePager() manually after mode escalation
+	if cfg.DisablePager && !session.requiresPrivilegedPager() {
 		_ = session.disablePager()
 	}
 
 	session.initialized = true
 	return session, nil
+}
+
+// requiresPrivilegedPager returns true for vendors that need privileged mode before pager disable
+func (s *ExpectSession) requiresPrivilegedPager() bool {
+	switch strings.ToLower(s.vendor) {
+	case "vsol":
+		return true // V-SOL requires privileged mode for terminal length 0
+	default:
+		return false
+	}
 }
 
 // disablePager sends the appropriate command to disable pagination
@@ -154,6 +178,11 @@ func (s *ExpectSession) disablePager() error {
 
 	_, err := s.Execute(cmd)
 	return err
+}
+
+// DisablePager is the public method to disable pager (for drivers that need to call it after mode escalation)
+func (s *ExpectSession) DisablePager() error {
+	return s.disablePager()
 }
 
 // Execute sends a command and waits for the prompt, returning the output
@@ -176,7 +205,23 @@ func (s *ExpectSession) Execute(command string) (string, error) {
 	// Clean up output: remove the command echo and trailing prompt
 	output = s.cleanOutput(output, command)
 
+	// Check for CLI error patterns in output
+	if err := s.checkCLIErrors(output); err != nil {
+		return output, err
+	}
+
 	return output, nil
+}
+
+// checkCLIErrors checks the output for common CLI error patterns
+func (s *ExpectSession) checkCLIErrors(output string) error {
+	outputLower := strings.ToLower(output)
+	for _, pattern := range CLIErrorPatterns {
+		if strings.Contains(outputLower, pattern) {
+			return fmt.Errorf("CLI error detected: %s", strings.TrimSpace(output))
+		}
+	}
+	return nil
 }
 
 // ExecuteBatch executes multiple commands in sequence
@@ -246,6 +291,45 @@ func (s *ExpectSession) SetTimeout(timeout time.Duration) {
 // GetPromptPattern returns the current prompt pattern
 func (s *ExpectSession) GetPromptPattern() *regexp.Regexp {
 	return s.promptRE
+}
+
+// ExecuteEnableWithPassword handles the enable command with password prompt.
+// V-SOL and some other vendors require a password after enable command.
+func (s *ExpectSession) ExecuteEnableWithPassword(password string) (string, error) {
+	if s.expecter == nil {
+		return "", fmt.Errorf("expect session not initialized")
+	}
+
+	// Send enable command
+	if err := s.expecter.Send("enable\n"); err != nil {
+		return "", fmt.Errorf("failed to send enable command: %w", err)
+	}
+
+	// Wait for either password prompt or privileged prompt
+	passwordRE := regexp.MustCompile(`(?i)Password\s*:\s*$`)
+	combinedRE := regexp.MustCompile(`(?m)(` + s.promptRE.String() + `|(?i)Password\s*:\s*$)`)
+
+	output, _, err := s.expecter.Expect(combinedRE, s.timeout)
+	if err != nil {
+		return output, fmt.Errorf("timeout waiting for enable response: %w", err)
+	}
+
+	// Check if we got a password prompt
+	if passwordRE.MatchString(output) {
+		// Send password
+		if err := s.expecter.Send(password + "\n"); err != nil {
+			return output, fmt.Errorf("failed to send enable password: %w", err)
+		}
+
+		// Wait for privileged prompt
+		output2, _, err := s.expecter.Expect(s.promptRE, s.timeout)
+		if err != nil {
+			return output + output2, fmt.Errorf("failed to enter privileged mode after password: %w", err)
+		}
+		output = output + output2
+	}
+
+	return s.cleanOutput(output, "enable"), nil
 }
 
 // SetPromptPattern updates the prompt pattern

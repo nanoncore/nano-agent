@@ -14,18 +14,37 @@ import (
 // HuaweiCLIDriver implements CLI operations for Huawei OLTs.
 type HuaweiCLIDriver struct {
 	*cli.BaseCLIDriver
+	model        string
+	capabilities *cli.VendorCapabilities
 }
 
 // NewHuaweiCLIDriver creates a new Huawei CLI driver.
 func NewHuaweiCLIDriver(config cli.CLIConfig) *HuaweiCLIDriver {
+	return NewHuaweiCLIDriverWithModel(config, "")
+}
+
+// NewHuaweiCLIDriverWithModel creates a new Huawei CLI driver with model-specific capabilities.
+func NewHuaweiCLIDriverWithModel(config cli.CLIConfig, model string) *HuaweiCLIDriver {
 	return &HuaweiCLIDriver{
 		BaseCLIDriver: cli.NewBaseCLIDriver(config),
+		model:         model,
+		capabilities:  cli.GetCapabilities("huawei", model),
 	}
 }
 
 // Vendor returns the vendor type.
 func (d *HuaweiCLIDriver) Vendor() string {
 	return "huawei"
+}
+
+// GetCapabilities returns the feature support matrix for this driver.
+func (d *HuaweiCLIDriver) GetCapabilities() *cli.VendorCapabilities {
+	return d.capabilities
+}
+
+// Model returns the OLT model.
+func (d *HuaweiCLIDriver) Model() string {
+	return d.model
 }
 
 // Connect establishes connection and enters config mode.
@@ -57,15 +76,21 @@ func (d *HuaweiCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionReque
 		return fmt.Errorf("serial number is required")
 	}
 
+	// Extract port number from PonPort (e.g., "0/0/1" -> 1)
+	portNum, err := extractPortNumber(req.PonPort)
+	if err != nil {
+		return fmt.Errorf("invalid PON port format: %w", err)
+	}
+
 	// Enter GPON interface context
 	cmd := fmt.Sprintf("interface gpon %s", req.PonPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
 		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
-	// Build ONT add command
+	// Build ONT add command: ont add {port} {ont_id} sn-auth {serial} omci ...
 	cmdParts := []string{
-		fmt.Sprintf("ont add %d sn-auth %s omci", req.OnuID, req.SerialNumber),
+		fmt.Sprintf("ont add %d %d sn-auth %s omci", portNum, req.OnuID, req.SerialNumber),
 	}
 
 	if req.LineProfile != "" {
@@ -108,12 +133,19 @@ func (d *HuaweiCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionReque
 
 // DeleteONU removes an ONT from Huawei OLT.
 func (d *HuaweiCLIDriver) DeleteONU(ctx context.Context, ponPort string, onuID int) error {
+	// Extract port number from PonPort (e.g., "0/0/1" -> 1)
+	portNum, err := extractPortNumber(ponPort)
+	if err != nil {
+		return fmt.Errorf("invalid PON port format: %w", err)
+	}
+
 	cmd := fmt.Sprintf("interface gpon %s", ponPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
 		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
-	cmd = fmt.Sprintf("ont delete %d", onuID)
+	// ont delete {port} {ont_id}
+	cmd = fmt.Sprintf("ont delete %d %d", portNum, onuID)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to delete ONT: %w", err)
@@ -474,18 +506,34 @@ func (d *HuaweiCLIDriver) ListPONPorts(ctx context.Context) ([]cli.PONPortInfo, 
 
 	var ports []cli.PONPortInfo
 	// Parse board info to find GPON ports
-	portRegex := regexp.MustCompile(`(?i)(\d+)\s+GPON\s+(\S+)`)
+	// Matches lines like: "  1        H901GPHF     Normal      V800R022C00       16-port GPON Board"
+	// The format is: <slot>  <board_name>  <status>  <version>  <description>
+	// We look for lines containing "GPON" anywhere (in board name or description)
+	portRegex := regexp.MustCompile(`(?i)^\s*(\d+)\s+(\S+)\s+(\S+)\s+\S+\s+.*GPON`)
 	matches := portRegex.FindAllStringSubmatch(output, -1)
+
+	// Also try a simpler pattern if the first one doesn't match
+	if len(matches) == 0 {
+		// Try matching lines that have a slot number and contain "GPON" anywhere
+		simpleRegex := regexp.MustCompile(`(?im)^\s*(\d+)\s+\S+\s+(\S+).*GPON`)
+		matches = simpleRegex.FindAllStringSubmatch(output, -1)
+	}
 	for _, m := range matches {
-		if len(m) >= 3 {
+		if len(m) >= 4 {
 			slot, _ := strconv.Atoi(m[1])
+			status := strings.ToLower(m[3])
+			// Normalize status
+			if status == "normal" {
+				status = "up"
+			}
 			for port := 0; port < 16; port++ {
 				ports = append(ports, cli.PONPortInfo{
-					Slot:   slot,
-					Port:   port,
-					Name:   fmt.Sprintf("0/%d/%d", slot, port),
-					Type:   "gpon",
-					Status: m[2],
+					Slot:        slot,
+					Port:        port,
+					Name:        fmt.Sprintf("0/%d/%d", slot, port),
+					Type:        "gpon",
+					Status:      status,
+					AdminStatus: "enable",
 				})
 			}
 		}
@@ -950,4 +998,20 @@ func evaluateOpticalPowerStatus(power float64) string {
 		return "warning"
 	}
 	return "normal"
+}
+
+// extractPortNumber extracts the port number from a PON port string.
+// Supports formats: "0/0/1" -> 1, "0/1" -> 1, "1" -> 1
+func extractPortNumber(ponPort string) (int, error) {
+	parts := strings.Split(ponPort, "/")
+	if len(parts) == 0 {
+		return 0, fmt.Errorf("empty PON port string")
+	}
+	// Get the last part (port number)
+	portStr := parts[len(parts)-1]
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0, fmt.Errorf("invalid port number: %s", portStr)
+	}
+	return port, nil
 }

@@ -162,6 +162,7 @@ type PONPortInfo struct {
 	ONUCount    int     `json:"onu_count"`
 	MaxONUs     int     `json:"max_onus,omitempty"`
 	TxPower     float64 `json:"tx_power,omitempty"`
+	RxPower     float64 `json:"rx_power,omitempty"`
 	Description string  `json:"description,omitempty"`
 	Uptime      string  `json:"uptime,omitempty"`
 }

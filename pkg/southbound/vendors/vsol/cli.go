@@ -14,12 +14,21 @@ import (
 // VSOLCLIDriver implements CLI operations for V-Sol OLTs.
 type VSOLCLIDriver struct {
 	*cli.BaseCLIDriver
+	model        string
+	capabilities *cli.VendorCapabilities
 }
 
 // NewVSOLCLIDriver creates a new V-Sol CLI driver.
 func NewVSOLCLIDriver(config cli.CLIConfig) *VSOLCLIDriver {
+	return NewVSOLCLIDriverWithModel(config, "")
+}
+
+// NewVSOLCLIDriverWithModel creates a new V-Sol CLI driver with model-specific capabilities.
+func NewVSOLCLIDriverWithModel(config cli.CLIConfig, model string) *VSOLCLIDriver {
 	return &VSOLCLIDriver{
 		BaseCLIDriver: cli.NewBaseCLIDriver(config),
+		model:         model,
+		capabilities:  cli.GetCapabilities("vsol", model),
 	}
 }
 
@@ -28,17 +37,36 @@ func (d *VSOLCLIDriver) Vendor() string {
 	return "vsol"
 }
 
+// GetCapabilities returns the feature support matrix for this driver.
+func (d *VSOLCLIDriver) GetCapabilities() *cli.VendorCapabilities {
+	return d.capabilities
+}
+
+// Model returns the OLT model.
+func (d *VSOLCLIDriver) Model() string {
+	return d.model
+}
+
 // Connect establishes connection and enters config mode.
 func (d *VSOLCLIDriver) Connect(ctx context.Context) error {
 	if err := d.BaseCLIDriver.Connect(ctx); err != nil {
 		return err
 	}
 
-	// V-Sol typically uses enable -> configure terminal
-	if _, err := d.Execute(ctx, "enable"); err != nil {
+	// V-Sol requires enable with password prompt
+	// Use the special method that handles Password: prompt
+	if _, err := d.ExecuteEnableWithPassword(ctx, d.Config().Password); err != nil {
 		return fmt.Errorf("failed to enter enable mode: %w", err)
 	}
 
+	// Now that we're in privileged mode, disable pager
+	// V-SOL requires privileged mode before terminal length 0 can be used
+	if err := d.DisablePager(); err != nil {
+		// Non-fatal, but log it
+		_ = err // Ignore pager disable errors
+	}
+
+	// Enter global config mode
 	if _, err := d.Execute(ctx, "configure terminal"); err != nil {
 		return fmt.Errorf("failed to enter config mode: %w", err)
 	}
@@ -47,41 +75,37 @@ func (d *VSOLCLIDriver) Connect(ctx context.Context) error {
 }
 
 // AddONU provisions a new ONU on V-Sol OLT.
+// V-SOL CLI syntax: onu add <onu_id> profile <profile> sn <serial>
 func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest) error {
 	if req.SerialNumber == "" {
 		return fmt.Errorf("serial number is required")
 	}
 
-	// Enter EPON/GPON interface
-	// V-Sol uses different interface naming depending on technology
-	cmd := fmt.Sprintf("interface epon %s", req.PonPort)
+	// Enter GPON interface
+	// V-Sol GPON OLTs use "interface gpon X/Y" format
+	cmd := fmt.Sprintf("interface gpon %s", req.PonPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		// Try GPON interface if EPON fails
-		cmd = fmt.Sprintf("interface gpon-olt %s", req.PonPort)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
-	// Build ONU authorization command
-	cmdParts := []string{
-		fmt.Sprintf("onu %d", req.OnuID),
+	// Build ONU add command - V-SOL syntax: onu add <id> profile <profile> sn <serial>
+	profile := req.LineProfile
+	if profile == "" {
+		profile = "AN5506-04-F1" // Use common V-SOL profile if none specified
 	}
 
-	if req.Type != "" {
-		cmdParts = append(cmdParts, fmt.Sprintf("type %s", req.Type))
-	}
-
-	cmdParts = append(cmdParts, fmt.Sprintf("sn %s", req.SerialNumber))
-
-	cmd = strings.Join(cmdParts, " ")
+	cmd = fmt.Sprintf("onu add %d profile %s sn %s", req.OnuID, profile, req.SerialNumber)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to add ONU: %w", err)
 	}
 
-	if strings.Contains(strings.ToLower(output), "error") ||
-		strings.Contains(strings.ToLower(output), "fail") {
+	// Check for error indicators - V-SOL uses various error messages
+	outputLower := strings.ToLower(output)
+	if strings.Contains(outputLower, "error") ||
+		strings.Contains(outputLower, "fail") ||
+		strings.Contains(outputLower, "isn't existed") ||
+		strings.Contains(outputLower, "not exist") {
 		return fmt.Errorf("ONU add failed: %s", output)
 	}
 
@@ -93,13 +117,8 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		}
 	}
 
-	// Configure native VLAN if specified
-	if req.NativeVLAN > 0 {
-		cmd = fmt.Sprintf("onu %d vlan %d", req.OnuID, req.NativeVLAN)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to configure VLAN: %w", err)
-		}
-	}
+	// Configure native VLAN if specified - V-SOL requires service port configuration
+	// This is handled separately with onu_service_port command if needed
 
 	// Configure service ports
 	for _, sp := range req.ServicePorts {
@@ -119,14 +138,10 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 
 // DeleteONU removes an ONU from V-Sol OLT.
 func (d *VSOLCLIDriver) DeleteONU(ctx context.Context, ponPort string, onuID int) error {
-	// Enter interface
-	cmd := fmt.Sprintf("interface epon %s", ponPort)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		// Try GPON interface
-		cmd = fmt.Sprintf("interface gpon-olt %s", ponPort)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	// Delete ONU
@@ -151,13 +166,106 @@ func (d *VSOLCLIDriver) DeleteONU(ctx context.Context, ponPort string, onuID int
 	return nil
 }
 
+// ONUBasicInfo holds minimal ONU information for duplicate detection.
+type ONUBasicInfo struct {
+	ID     int
+	Serial string
+}
+
+// ListONUs returns a list of existing ONU IDs on a given PON port.
+// This is used to find available ONU IDs for auto-assignment during provisioning.
+func (d *VSOLCLIDriver) ListONUs(ctx context.Context, ponPort string) ([]int, error) {
+	infos, err := d.ListONUsWithSerial(ctx, ponPort)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, len(infos))
+	for i, info := range infos {
+		ids[i] = info.ID
+	}
+	return ids, nil
+}
+
+// ListONUsWithSerial returns a list of existing ONUs with their IDs and serial numbers.
+// This uses "show onu info all" which returns serial numbers in a single command.
+func (d *VSOLCLIDriver) ListONUsWithSerial(ctx context.Context, ponPort string) ([]ONUBasicInfo, error) {
+	serialMap, err := d.GetONUInfoAll(ctx, ponPort)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]ONUBasicInfo, 0, len(serialMap))
+	for id, serial := range serialMap {
+		result = append(result, ONUBasicInfo{ID: id, Serial: serial})
+	}
+	return result, nil
+}
+
+// GetONUInfoAll returns a map of ONU ID to serial number for all ONUs on a port.
+// This uses "show onu info all" which is more efficient than individual queries.
+func (d *VSOLCLIDriver) GetONUInfoAll(ctx context.Context, ponPort string) (map[int]string, error) {
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+
+	// Get ONU info all - this includes serial numbers
+	// Format: Onuindex   Model                Profile                Mode    AuthInfo
+	//         GPON0/1:1  Generic-ONU          default                sn      VSOL00000001
+	output, err := d.Execute(ctx, "show onu info all")
+	if err != nil {
+		d.Execute(ctx, "exit") // Try to exit interface
+		return nil, fmt.Errorf("failed to get ONU info: %w", err)
+	}
+
+	// Exit interface
+	d.Execute(ctx, "exit")
+
+	// Parse ONU IDs and serials from output
+	result := make(map[int]string)
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Onuindex") || strings.HasPrefix(line, "-") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 1 {
+			// Parse Onuindex format: GPON0/X:Y where Y is the ONU ID
+			onuIndex := fields[0]
+			if colonIdx := strings.LastIndex(onuIndex, ":"); colonIdx != -1 {
+				idStr := onuIndex[colonIdx+1:]
+				if id, err := strconv.Atoi(idStr); err == nil && id > 0 && id <= 128 {
+					// Serial is in the last column (AuthInfo)
+					serial := ""
+					if len(fields) >= 5 {
+						serial = strings.ToUpper(fields[4])
+					}
+					result[id] = serial
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
 // GetONUInfo retrieves ONU information via CLI.
 func (d *VSOLCLIDriver) GetONUInfo(ctx context.Context, ponPort string, onuID int) (*cli.ONUCLIInfo, error) {
-	cmd := fmt.Sprintf("show onu %s/%d info", ponPort, onuID)
+	// Enter GPON interface first
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	// V-SOL uses "show onu <id> info" or "show onu info" in interface mode
+	cmd = fmt.Sprintf("show onu %d detail-info", onuID)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
-		// Try alternate command format
-		cmd = fmt.Sprintf("show epon onu-info %s %d", ponPort, onuID)
+		// Try basic info
+		cmd = fmt.Sprintf("show onu %d info", onuID)
 		output, err = d.Execute(ctx, cmd)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get ONU info: %w", err)
@@ -168,46 +276,63 @@ func (d *VSOLCLIDriver) GetONUInfo(ctx context.Context, ponPort string, onuID in
 }
 
 // parseVSOLONUInfo parses V-Sol ONU info output.
+// Handles output from "show onu <id> detail-info" which looks like:
+//
+//	---------onu 1 defail-info---------
+//	Vendor ID:                              FHTT
+//	SN:                                     FHTT5929e410
+//	Operate status:                         enable
+//	Equipment ID:                           HG6143D
+//	Model:                                  HG6143D
 func parseVSOLONUInfo(output string, ponPort string, onuID int) (*cli.ONUCLIInfo, error) {
 	info := &cli.ONUCLIInfo{
 		PonPort: ponPort,
 		OnuID:   onuID,
 	}
 
-	// Parse serial number
-	snRegex := regexp.MustCompile(`(?i)Serial\s*[Nn]umber\s*:\s*(\S+)`)
+	// Parse serial number (SN field in V-SOL)
+	snRegex := regexp.MustCompile(`(?i)(?:SN|Serial\s*[Nn]umber)\s*:[\s\x00-\x1F]*(\S+)`)
 	if matches := snRegex.FindStringSubmatch(output); len(matches) > 1 {
-		info.SerialNumber = matches[1]
+		info.SerialNumber = strings.ToUpper(matches[1])
 	}
 
 	// Parse MAC address
-	macRegex := regexp.MustCompile(`(?i)MAC\s*[Aa]ddress\s*:\s*(\S+)`)
+	macRegex := regexp.MustCompile(`(?i)MAC\s*[Aa]ddress\s*:[\s\x00-\x1F]*(\S+)`)
 	if matches := macRegex.FindStringSubmatch(output); len(matches) > 1 {
 		info.MAC = matches[1]
 	}
 
-	// Parse status
-	statusRegex := regexp.MustCompile(`(?i)Status\s*:\s*(\S+)`)
+	// Parse status (Operate status in V-SOL)
+	statusRegex := regexp.MustCompile(`(?i)(?:Operate\s*status|Status|Phase\s*State)\s*:[\s\x00-\x1F]*(\S+)`)
 	if matches := statusRegex.FindStringSubmatch(output); len(matches) > 1 {
-		info.Status = strings.ToLower(matches[1])
+		status := strings.ToLower(matches[1])
+		// Normalize status
+		switch status {
+		case "enable", "working":
+			info.Status = "online"
+		case "disable", "offline":
+			info.Status = "offline"
+		default:
+			info.Status = status
+		}
 	}
 
-	// Parse type/model
-	typeRegex := regexp.MustCompile(`(?i)(?:Type|Model)\s*:\s*(\S+)`)
+	// Parse type/model (Equipment ID or Model in V-SOL)
+	typeRegex := regexp.MustCompile(`(?i)(?:Equipment\s*ID|Model|Type)\s*:[\s\x00-\x1F]*(\S+)`)
 	if matches := typeRegex.FindStringSubmatch(output); len(matches) > 1 {
 		info.Type = matches[1]
 	}
 
 	// Parse distance
-	distRegex := regexp.MustCompile(`(?i)Distance\s*:\s*(\d+)`)
+	distRegex := regexp.MustCompile(`(?i)Distance\s*:[\s\x00-\x1F]*(\d+)`)
 	if matches := distRegex.FindStringSubmatch(output); len(matches) > 1 {
 		if d, err := strconv.Atoi(matches[1]); err == nil {
 			info.Distance = d
 		}
 	}
 
-	// Parse RX power
-	rxRegex := regexp.MustCompile(`(?i)(?:RX|Receive)\s*[Pp]ower\s*:\s*([-\d.]+)`)
+	// Parse RX power (if present in output)
+	rxRegex := regexp.MustCompile(`(?i)(?:RX|Receive)\s*[Pp]ower\s*:[\s\x00-\x1F]*([-\d.]+)`)
 	if matches := rxRegex.FindStringSubmatch(output); len(matches) > 1 {
 		if rx, err := strconv.ParseFloat(matches[1], 64); err == nil {
 			info.RxPower = rx
@@ -215,7 +340,7 @@ func parseVSOLONUInfo(output string, ponPort string, onuID int) (*cli.ONUCLIInfo
 	}
 
 	// Parse description
-	descRegex := regexp.MustCompile(`(?i)Description\s*:\s*(.+)`)
+	descRegex := regexp.MustCompile(`(?i)Description\s*:[\s\x00-\x1F]*(.+)`)
 	if matches := descRegex.FindStringSubmatch(output); len(matches) > 1 {
 		info.Description = strings.TrimSpace(matches[1])
 	}
@@ -243,12 +368,10 @@ func (d *VSOLCLIDriver) SaveConfig(ctx context.Context) error {
 
 // RebootONU reboots a specific ONU.
 func (d *VSOLCLIDriver) RebootONU(ctx context.Context, ponPort string, onuID int) error {
-	cmd := fmt.Sprintf("interface epon %s", ponPort)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon-olt %s", ponPort)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	cmd = fmt.Sprintf("onu %d reboot", onuID)
@@ -269,13 +392,10 @@ func (d *VSOLCLIDriver) RebootONU(ctx context.Context, ponPort string, onuID int
 
 // ConfigureVLAN configures VLAN settings for an ONU.
 func (d *VSOLCLIDriver) ConfigureVLAN(ctx context.Context, config *cli.VLANConfig) error {
-	// Enter interface
-	cmd := fmt.Sprintf("interface epon %s", config.PonPort)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", config.PonPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon-olt %s", config.PonPort)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	// Configure native VLAN (PVID)
@@ -338,7 +458,14 @@ func (d *VSOLCLIDriver) addVLANTranslation(ctx context.Context, onuID int, tr cl
 
 // GetVLANConfig retrieves VLAN configuration for an ONU.
 func (d *VSOLCLIDriver) GetVLANConfig(ctx context.Context, ponPort string, onuID int) (*cli.VLANConfig, error) {
-	cmd := fmt.Sprintf("show onu %s/%d vlan", ponPort, onuID)
+	// Enter GPON interface first
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	cmd = fmt.Sprintf("show onu %d portvlan", onuID)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get VLAN config: %w", err)
@@ -424,13 +551,10 @@ func parseVLANList(s string) []int {
 
 // AddVLANTranslation adds a VLAN translation rule.
 func (d *VSOLCLIDriver) AddVLANTranslation(ctx context.Context, ponPort string, onuID int, translation cli.VLANTranslation) error {
-	// Enter interface
-	cmd := fmt.Sprintf("interface epon %s", ponPort)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon-olt %s", ponPort)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	if err := d.addVLANTranslation(ctx, onuID, translation); err != nil {
@@ -446,13 +570,10 @@ func (d *VSOLCLIDriver) AddVLANTranslation(ctx context.Context, ponPort string, 
 
 // RemoveVLANTranslation removes a VLAN translation rule.
 func (d *VSOLCLIDriver) RemoveVLANTranslation(ctx context.Context, ponPort string, onuID int, customerVLAN int) error {
-	// Enter interface
-	cmd := fmt.Sprintf("interface epon %s", ponPort)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon-olt %s", ponPort)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	cmd = fmt.Sprintf("no onu %d vlan translate %d", onuID, customerVLAN)
@@ -478,29 +599,31 @@ func (d *VSOLCLIDriver) ListVLANs(ctx context.Context) ([]cli.VLANInfo, error) {
 }
 
 // parseVSOLVLANList parses V-Sol VLAN list output.
+// V-Sol format is a space-separated list of VLAN IDs:
+//
+//	Created VLANs:
+//	            1   701   702
 func parseVSOLVLANList(output string) ([]cli.VLANInfo, error) {
 	var vlans []cli.VLANInfo
 
-	// V-Sol format typically:
-	// VLAN ID    Name                    Description
-	// -------    ----                    -----------
-	// 1          default                 Default VLAN
-	// 100        DATA                    Data VLAN
-	vlanRegex := regexp.MustCompile(`^\s*(\d+)\s+(\S+)\s*(.*)$`)
-	lines := strings.Split(output, "\n")
+	// Extract all numbers from the output as VLAN IDs
+	// The format is: "Created VLANs:\n            1   701   702"
+	vlanIDRegex := regexp.MustCompile(`\b(\d+)\b`)
+	matches := vlanIDRegex.FindAllStringSubmatch(output, -1)
 
-	for _, line := range lines {
-		if matches := vlanRegex.FindStringSubmatch(line); len(matches) > 2 {
-			id, err := strconv.Atoi(matches[1])
-			if err != nil {
-				continue
-			}
-			vlans = append(vlans, cli.VLANInfo{
-				ID:          id,
-				Name:        strings.TrimSpace(matches[2]),
-				Description: strings.TrimSpace(matches[3]),
-			})
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
 		}
+		id, err := strconv.Atoi(match[1])
+		if err != nil {
+			continue
+		}
+		// V-Sol auto-generates VLAN names as "vlan<id>"
+		vlans = append(vlans, cli.VLANInfo{
+			ID:   id,
+			Name: fmt.Sprintf("vlan%d", id),
+		})
 	}
 
 	return vlans, nil
@@ -694,13 +817,10 @@ func parseVSOLTrafficProfiles(output string) ([]cli.TrafficProfile, error) {
 
 // AssignTrafficProfile assigns a traffic profile to an ONU.
 func (d *VSOLCLIDriver) AssignTrafficProfile(ctx context.Context, ponPort string, onuID int, profileID int) error {
-	// Enter interface
-	cmd := fmt.Sprintf("interface epon %s", ponPort)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon-olt %s", ponPort)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	cmd = fmt.Sprintf("onu %d bandwidth-profile %d", onuID, profileID)
@@ -720,17 +840,75 @@ func (d *VSOLCLIDriver) AssignTrafficProfile(ctx context.Context, ponPort string
 // =============================================================================
 
 // ListPONPorts lists all PON ports on the device.
+// V-SOL OLTs don't have a command to list PON ports directly.
+// We enumerate ports 0/1 through 0/8 by trying to enter each interface.
 func (d *VSOLCLIDriver) ListPONPorts(ctx context.Context) ([]cli.PONPortInfo, error) {
-	output, err := d.Execute(ctx, "show interface epon brief")
-	if err != nil {
-		// Try GPON
-		output, err = d.Execute(ctx, "show interface gpon brief")
+	var ports []cli.PONPortInfo
+
+	// V-SOL OLTs typically have up to 8 PON ports (0/1 through 0/8)
+	for portNum := 1; portNum <= 8; portNum++ {
+		portName := fmt.Sprintf("0/%d", portNum)
+
+		// Try to enter the interface to check if it exists
+		cmd := fmt.Sprintf("interface gpon %s", portName)
+		output, err := d.Execute(ctx, cmd)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list PON ports: %w", err)
+			continue // Port doesn't exist or error entering
 		}
+
+		// Check if the command was rejected (interface doesn't exist)
+		outputLower := strings.ToLower(output)
+		if strings.Contains(outputLower, "error") ||
+			strings.Contains(outputLower, "unknown") ||
+			strings.Contains(outputLower, "invalid") ||
+			strings.Contains(outputLower, "parameter error") {
+			continue // Interface doesn't exist
+		}
+
+		// We're now in interface mode - get ONU count from show onu info all
+		onuCount := 0
+		onuOutput, err := d.Execute(ctx, "show onu info all")
+		if err == nil {
+			onuCount = countONUsFromOutput(onuOutput)
+		}
+
+		// Exit the interface mode
+		d.Execute(ctx, "exit")
+
+		ports = append(ports, cli.PONPortInfo{
+			Slot:        0,
+			Port:        portNum,
+			Name:        portName,
+			Type:        "gpon",
+			Status:      "up",
+			AdminStatus: "enable",
+			ONUCount:    onuCount,
+		})
 	}
 
-	return parseVSOLPONPorts(output)
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("no PON ports found")
+	}
+	return ports, nil
+}
+
+// countONUsFromOutput counts ONUs from "show onu info all" output.
+// V-SOL format: GPON0/X:Y where Y is the ONU ID
+func countONUsFromOutput(output string) int {
+	count := 0
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Skip header and separator lines
+		if line == "" || strings.HasPrefix(line, "Onuindex") || strings.HasPrefix(line, "-") {
+			continue
+		}
+		// Check if line starts with GPON (indicates an ONU entry)
+		if strings.HasPrefix(line, "GPON") {
+			count++
+		}
+	}
+	return count
 }
 
 // parseVSOLPONPorts parses V-Sol PON port list.
@@ -776,14 +954,16 @@ func parseVSOLPONPorts(output string) ([]cli.PONPortInfo, error) {
 
 // GetPONPortInfo retrieves information about a specific PON port.
 func (d *VSOLCLIDriver) GetPONPortInfo(ctx context.Context, slot, port int) (*cli.PONPortInfo, error) {
-	cmd := fmt.Sprintf("show interface epon %d/%d", slot, port)
-	output, err := d.Execute(ctx, cmd)
+	// V-SOL uses "show pon info" in interface mode
+	cmd := fmt.Sprintf("interface gpon %d/%d", slot, port)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	output, err := d.Execute(ctx, "show pon info")
 	if err != nil {
-		cmd = fmt.Sprintf("show interface gpon %d/%d", slot, port)
-		output, err = d.Execute(ctx, cmd)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get PON port info: %w", err)
-		}
+		return nil, fmt.Errorf("failed to get PON port info: %w", err)
 	}
 
 	return parseVSOLPONPortInfo(output, slot, port)
@@ -845,12 +1025,10 @@ func parseVSOLPONPortInfo(output string, slot, port int) (*cli.PONPortInfo, erro
 
 // EnablePONPort enables a PON port.
 func (d *VSOLCLIDriver) EnablePONPort(ctx context.Context, slot, port int) error {
-	cmd := fmt.Sprintf("interface epon %d/%d", slot, port)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %d/%d", slot, port)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon %d/%d", slot, port)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	if _, err := d.Execute(ctx, "no shutdown"); err != nil {
@@ -866,12 +1044,10 @@ func (d *VSOLCLIDriver) EnablePONPort(ctx context.Context, slot, port int) error
 
 // DisablePONPort disables a PON port.
 func (d *VSOLCLIDriver) DisablePONPort(ctx context.Context, slot, port int) error {
-	cmd := fmt.Sprintf("interface epon %d/%d", slot, port)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %d/%d", slot, port)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon %d/%d", slot, port)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	if _, err := d.Execute(ctx, "shutdown"); err != nil {
@@ -887,12 +1063,10 @@ func (d *VSOLCLIDriver) DisablePONPort(ctx context.Context, slot, port int) erro
 
 // SetPortDescription sets the description for a port.
 func (d *VSOLCLIDriver) SetPortDescription(ctx context.Context, slot, port int, description string) error {
-	cmd := fmt.Sprintf("interface epon %d/%d", slot, port)
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %d/%d", slot, port)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		cmd = fmt.Sprintf("interface gpon %d/%d", slot, port)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to enter interface: %w", err)
-		}
+		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
 	cmd = fmt.Sprintf("description %s", description)
@@ -1102,7 +1276,14 @@ func (d *VSOLCLIDriver) GetONUDiagnostics(ctx context.Context, ponPort string, o
 
 // getONUHealth retrieves ONU health information.
 func (d *VSOLCLIDriver) getONUHealth(ctx context.Context, ponPort string, onuID int) (*cli.DeviceHealth, error) {
-	cmd := fmt.Sprintf("show onu %s/%d status", ponPort, onuID)
+	// Enter GPON interface first
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	cmd = fmt.Sprintf("show onu %d detail-info", onuID)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
 		return nil, err
@@ -1151,15 +1332,17 @@ func (d *VSOLCLIDriver) getONUHealth(ctx context.Context, ponPort string, onuID 
 
 // getONUConnectivity retrieves ONU connectivity information.
 func (d *VSOLCLIDriver) getONUConnectivity(ctx context.Context, ponPort string, onuID int) (*cli.ConnectivityInfo, error) {
-	cmd := fmt.Sprintf("show onu %s/%d connectivity", ponPort, onuID)
+	// Enter GPON interface first
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	cmd = fmt.Sprintf("show onu %d state", onuID)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
-		// Try alternate command
-		cmd = fmt.Sprintf("show onu %s/%d info", ponPort, onuID)
-		output, err = d.Execute(ctx, cmd)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	conn := &cli.ConnectivityInfo{}
@@ -1193,15 +1376,18 @@ func (d *VSOLCLIDriver) getONUConnectivity(ctx context.Context, ponPort string, 
 
 // GetONUCounters retrieves performance counters for an ONU.
 func (d *VSOLCLIDriver) GetONUCounters(ctx context.Context, ponPort string, onuID int) (*cli.PerformanceCounters, error) {
-	cmd := fmt.Sprintf("show onu %s/%d counters", ponPort, onuID)
+	// Enter GPON interface first
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	// V-SOL may use various counter commands
+	cmd = fmt.Sprintf("show onu %d eth 1 statistics", onuID)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
-		// Try alternate command
-		cmd = fmt.Sprintf("show epon onu-counters %s %d", ponPort, onuID)
-		output, err = d.Execute(ctx, cmd)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get ONU counters: %w", err)
-		}
+		return nil, fmt.Errorf("failed to get ONU counters: %w", err)
 	}
 
 	return parseVSOLCounters(output)
@@ -1276,15 +1462,17 @@ func parseVSOLCounters(output string) (*cli.PerformanceCounters, error) {
 
 // ClearONUCounters clears/resets performance counters for an ONU.
 func (d *VSOLCLIDriver) ClearONUCounters(ctx context.Context, ponPort string, onuID int) error {
-	cmd := fmt.Sprintf("clear onu %s/%d counters", ponPort, onuID)
+	// Enter GPON interface first
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	cmd = fmt.Sprintf("clean onu %d statistics", onuID)
 	_, err := d.Execute(ctx, cmd)
 	if err != nil {
-		// Try alternate command
-		cmd = fmt.Sprintf("clear epon onu-counters %s %d", ponPort, onuID)
-		_, err = d.Execute(ctx, cmd)
-		if err != nil {
-			return fmt.Errorf("failed to clear ONU counters: %w", err)
-		}
+		return fmt.Errorf("failed to clear ONU counters: %w", err)
 	}
 
 	return nil
@@ -1292,18 +1480,41 @@ func (d *VSOLCLIDriver) ClearONUCounters(ctx context.Context, ponPort string, on
 
 // GetOpticalDiagnostics retrieves optical power readings for an ONU.
 func (d *VSOLCLIDriver) GetOpticalDiagnostics(ctx context.Context, ponPort string, onuID int) (*cli.OpticalDiagnostics, error) {
-	cmd := fmt.Sprintf("show onu %s/%d optical", ponPort, onuID)
-	output, err := d.Execute(ctx, cmd)
-	if err != nil {
-		// Try alternate command
-		cmd = fmt.Sprintf("show epon onu-optical %s %d", ponPort, onuID)
-		output, err = d.Execute(ctx, cmd)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get optical diagnostics: %w", err)
+	// Enter GPON interface first
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+	defer d.Execute(ctx, "exit")
+
+	diag := &cli.OpticalDiagnostics{}
+
+	// V-SOL uses "show pon onu <id> rx-power" and "show pon onu <id> tx-power"
+	cmd = fmt.Sprintf("show pon onu %d rx-power", onuID)
+	rxOutput, err := d.Execute(ctx, cmd)
+	if err == nil {
+		// Parse RX power from output like "GPON0/1:1           -28.530(dbm)"
+		rxRegex := regexp.MustCompile(`([-\d.]+)\s*\(?\s*dbm\s*\)?`)
+		if matches := rxRegex.FindStringSubmatch(rxOutput); len(matches) > 1 {
+			diag.RxPower, _ = strconv.ParseFloat(matches[1], 64)
 		}
 	}
 
-	return parseVSOLOpticalDiag(output)
+	cmd = fmt.Sprintf("show pon onu %d tx-power", onuID)
+	txOutput, err := d.Execute(ctx, cmd)
+	if err == nil {
+		// Parse TX power
+		txRegex := regexp.MustCompile(`([-\d.]+)\s*\(?\s*dbm\s*\)?`)
+		if matches := txRegex.FindStringSubmatch(txOutput); len(matches) > 1 {
+			diag.TxPower, _ = strconv.ParseFloat(matches[1], 64)
+		}
+	}
+
+	// Determine status based on thresholds
+	diag.RxPowerStatus = determineOpticalStatus(diag.RxPower, -28.0, -25.0)
+	diag.TxPowerStatus = determineOpticalStatus(diag.TxPower, -3.0, 0.5)
+
+	return diag, nil
 }
 
 // parseVSOLOpticalDiag parses V-Sol optical diagnostics output.

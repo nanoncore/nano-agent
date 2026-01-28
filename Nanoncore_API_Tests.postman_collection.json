@@ -1,0 +1,591 @@
+{
+	"info": {
+		"_postman_id": "nanoncore-agent-testing",
+		"name": "Nanoncore API Tests",
+		"description": "API tests for nano-agent and nanoncore control plane",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Agent APIs (Working)",
+			"item": [
+				{
+					"name": "Agent Heartbeat",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{agent_api_key}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"agentId\": \"{{agent_id}}\",\n  \"nodeId\": \"agent-1\",\n  \"nodeType\": \"bng\",\n  \"nodeName\": \"agent-1\",\n  \"timestamp\": {{$timestamp}}000,\n  \"nodeMetrics\": {\n    \"cpu\": 25.5,\n    \"memory\": 45.2,\n    \"uptime\": 172800,\n    \"sessions\": 0\n  },\n  \"interfaces\": [],\n  \"segment\": \"test\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/agents/heartbeat",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"agents",
+								"heartbeat"
+							]
+						},
+						"description": "Send a heartbeat to the control plane. This works with agent API key."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Network APIs (Requires Cookies)",
+			"item": [
+				{
+					"name": "List All Agents in Network",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text",
+								"description": "Session from browser"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/agents",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"agents"
+							]
+						},
+						"description": "List all agents in the network. Requires browser session cookie."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Agent Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/agents/{{agent_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"agents",
+								"{{agent_id}}"
+							]
+						},
+						"description": "Get specific agent details"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Network Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}"
+							]
+						},
+						"description": "Get network details by ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Create Enrollment Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"nodeId\": \"test-agent-2\",\n  \"expiresInHours\": 24\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/agents/enroll",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"agents",
+								"enroll"
+							]
+						},
+						"description": "Create a new enrollment token (requires ADMIN role)"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Agent Config API (To Be Implemented)",
+			"item": [
+				{
+					"name": "Get Node Config (404 - Not Implemented)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{agent_api_key}}",
+								"type": "text"
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/nodes/agent-1/config",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"nodes",
+								"agent-1",
+								"config"
+							]
+						},
+						"description": "This endpoint doesn't exist yet (returns 404). The agent tries to call this for config sync every 5 minutes.\n\nExpected response should include OLT configurations for the agent to monitor."
+					},
+					"response": []
+				},
+				{
+					"name": "Set Node Config (Example - Not Implemented)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"nodeId\": \"agent-1\",\n  \"config\": {\n    \"olts\": [\n      {\n        \"id\": \"olt-1\",\n        \"name\": \"OLT Simulator Dev\",\n        \"vendor\": \"huawei\",\n        \"model\": \"ma5800\",\n        \"address\": \"172.25.0.2\",\n        \"protocols\": {\n          \"snmp\": {\n            \"enabled\": true,\n            \"port\": 161,\n            \"community\": \"public\",\n            \"version\": \"2c\"\n          },\n          \"ssh\": {\n            \"enabled\": true,\n            \"port\": 2222,\n            \"username\": \"admin\",\n            \"password\": \"admin\"\n          }\n        },\n        \"polling\": {\n          \"interval\": 300,\n          \"metrics\": [\"onu-status\", \"optical-power\", \"traffic\"]\n        },\n        \"discovery\": {\n          \"enabled\": true,\n          \"interval\": 3600\n        }\n      }\n    ]\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/nodes/agent-1/config",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"nodes",
+								"agent-1",
+								"config"
+							]
+						},
+						"description": "EXAMPLE endpoint to set OLT configuration for an agent. Not implemented yet.\n\nThis would tell the agent which OLTs to monitor and how."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "OLT Management APIs (To Be Implemented)",
+			"item": [
+				{
+					"name": "List All Equipment",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/equipment",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"equipment"
+							]
+						},
+						"description": "List all equipment in the network (OLTs, ONUs, switches, etc.)"
+					},
+					"response": []
+				},
+				{
+					"name": "List OLTs Only",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/equipment?type=olt",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"equipment"
+							],
+							"query": [
+								{
+									"key": "type",
+									"value": "olt",
+									"description": "Filter by equipment type"
+								}
+							]
+						},
+						"description": "List only OLT equipment in the network (filters by type=olt)"
+					},
+					"response": []
+				},
+				{
+					"name": "Get OLT Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/equipment/olt-1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"equipment",
+								"olt-1"
+							]
+						},
+						"description": "Get details for a specific OLT by ID"
+					},
+					"response": []
+				},
+				{
+					"name": "Add OLT Equipment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"networkId\": \"{{network_id}}\",\n  \"agentId\": \"{{agent_id}}\",\n  \"name\": \"OLT Simulator Dev\",\n  \"vendor\": \"huawei\",\n  \"model\": \"ma5800\",\n  \"type\": \"olt\",\n  \"address\": \"172.25.0.2\",\n  \"protocols\": {\n    \"snmp\": {\n      \"enabled\": true,\n      \"port\": 161,\n      \"community\": \"public\"\n    },\n    \"ssh\": {\n      \"enabled\": true,\n      \"port\": 2222,\n      \"username\": \"admin\",\n      \"password\": \"admin\"\n    }\n  }\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/equipment",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"equipment"
+							]
+						},
+						"description": "EXAMPLE: Add OLT equipment to a network. This would trigger the agent to start monitoring it."
+					},
+					"response": []
+				},
+				{
+					"name": "Trigger ONU Discovery",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"oltId\": \"olt-1\",\n  \"ponPorts\": [\"0/0/1\", \"0/0/2\"],\n  \"immediate\": true\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/agents/{{agent_id}}/discover",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"agents",
+								"{{agent_id}}",
+								"discover"
+							]
+						},
+						"description": "EXAMPLE: Trigger immediate ONU discovery on specific OLT/ports via the agent."
+					},
+					"response": []
+				},
+				{
+					"name": "Get OLT Metrics",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/equipment/olt-1/metrics",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"equipment",
+								"olt-1",
+								"metrics"
+							]
+						},
+						"description": "EXAMPLE: Get real-time metrics from an OLT (collected by the agent)"
+					},
+					"response": []
+				},
+				{
+					"name": "List ONUs on OLT",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "Cookie",
+								"value": "__session={{user_session_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/networks/{{network_id}}/equipment/olt-1/onus",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"networks",
+								"{{network_id}}",
+								"equipment",
+								"olt-1",
+								"onus"
+							]
+						},
+						"description": "EXAMPLE: List all ONUs discovered on an OLT"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "OLT Simulator (Local - Working)",
+			"item": [
+				{
+					"name": "OLT Status",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8080/api/status",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"api",
+								"status"
+							]
+						},
+						"description": "Get OLT simulator status (local Docker container)"
+					},
+					"response": []
+				},
+				{
+					"name": "List Devices",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "http://localhost:8080/api/devices",
+							"protocol": "http",
+							"host": [
+								"localhost"
+							],
+							"port": "8080",
+							"path": [
+								"api",
+								"devices"
+							]
+						},
+						"description": "List all devices in OLT simulator"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "https://app.nanoncore.com",
+			"type": "string"
+		},
+		{
+			"key": "network_id",
+			"value": "cmjpgulnd0001hk0jw1jggjhz",
+			"type": "string"
+		},
+		{
+			"key": "agent_id",
+			"value": "cmjpgunzf0007hk0jxs4t5mr1",
+			"type": "string"
+		},
+		{
+			"key": "agent_api_key",
+			"value": "na_XYrpvy_9n232FnPtrluKVqNMq0nJ-gF6B-0h5wOCfyM",
+			"type": "string"
+		},
+		{
+			"key": "user_session_token",
+			"value": "PASTE_YOUR_SESSION_TOKEN_HERE",
+			"type": "string",
+			"description": "Get from browser: await window.Clerk.session.getToken() - Use in Cookie header as __session={{user_session_token}}"
+		}
+	]
+}

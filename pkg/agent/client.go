@@ -692,10 +692,19 @@ type OLTDiscoveryConfig struct {
 
 // AgentConfigResponse represents the full configuration response from the control plane.
 type AgentConfigResponse struct {
-	NodeID        string         `json:"nodeId"`
-	Version       int            `json:"version"`
-	OLTs          []OLTConfig    `json:"olts"`
-	PendingProbes []PendingProbe `json:"pendingProbes,omitempty"`
+	NodeID          string           `json:"nodeId"`
+	Version         int              `json:"version"`
+	OLTs            []OLTConfig      `json:"olts"`
+	PendingProbes   []PendingProbe   `json:"pendingProbes,omitempty"`
+	PendingCommands []PendingCommand `json:"pendingCommands,omitempty"`
+}
+
+// PendingCommand represents a command queued by the control plane for execution.
+type PendingCommand struct {
+	ID          string                 `json:"id"`
+	EquipmentID string                 `json:"equipmentId"`
+	Type        string                 `json:"type"`
+	Payload     map[string]interface{} `json:"payload"`
 }
 
 // PendingProbe represents a probe request queued by the control plane.
@@ -785,7 +794,7 @@ func (c *Client) GetOLTConfig(nodeID string) (*AgentConfigResponse, error) {
 type ONUData struct {
 	Serial          string  `json:"serialNumber"`
 	PONPort         string  `json:"ponPort"`
-	ONUID           int     `json:"onuId,omitempty"`
+	ONUID           int     `json:"onuId"`
 	Status          string  `json:"status"`
 	Distance        int     `json:"distance,omitempty"`
 	RxPower         float64 `json:"rxPower,omitempty"`
@@ -869,6 +878,12 @@ func (c *Client) PushONUs(oltID string, onus []ONUData) (*PushONUsResponse, erro
 	}
 
 	return &pushResp, nil
+}
+
+// PushSingleONU pushes a single ONU update immediately after command execution.
+// This is a convenience wrapper around PushONUs for immediate post-command updates.
+func (c *Client) PushSingleONU(oltID string, onu ONUData) (*PushONUsResponse, error) {
+	return c.PushONUs(oltID, []ONUData{onu})
 }
 
 // TelemetryData represents telemetry data to be pushed to the control plane.
@@ -998,4 +1013,111 @@ func (c *Client) PushMetrics(batch *MetricsBatch) (*PushMetricsResponse, error) 
 	}
 
 	return &pushResp, nil
+}
+
+// CommandAckResponse is the response from acknowledging a command.
+type CommandAckResponse struct {
+	Success   bool   `json:"success"`
+	CommandID string `json:"commandId"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+}
+
+// AckCommand acknowledges receipt of a command and marks it as in_progress.
+// This should be called when the agent starts executing a command.
+func (c *Client) AckCommand(commandID string) (*CommandAckResponse, error) {
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/commands/"+commandID+"/ack", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	c.checkResponseHeaders(resp)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ack command failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var ackResp CommandAckResponse
+	if err := json.Unmarshal(respBody, &ackResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &ackResp, nil
+}
+
+// CommandResultRequest is sent to push command execution results.
+type CommandResultRequest struct {
+	Success    bool                   `json:"success"`
+	Result     map[string]interface{} `json:"result,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	PreState   map[string]interface{} `json:"preState,omitempty"`
+	PostState  map[string]interface{} `json:"postState,omitempty"`
+	Verified   bool                   `json:"verified,omitempty"`
+	DurationMs int64                  `json:"durationMs,omitempty"`
+}
+
+// CommandResultResponse is the response from pushing command results.
+type CommandResultResponse struct {
+	Success   bool   `json:"success"`
+	CommandID string `json:"commandId"`
+	Status    string `json:"status"`
+	Message   string `json:"message,omitempty"`
+}
+
+// PushCommandResult sends the result of a command execution to the control plane.
+func (c *Client) PushCommandResult(commandID string, req *CommandResultRequest) (*CommandResultResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest("POST", c.baseURL+"/api/v1/commands/"+commandID+"/result", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	c.checkResponseHeaders(resp)
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("push command result failed (HTTP %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var resultResp CommandResultResponse
+	if err := json.Unmarshal(respBody, &resultResp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &resultResp, nil
 }
