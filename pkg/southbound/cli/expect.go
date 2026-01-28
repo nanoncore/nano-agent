@@ -35,6 +35,17 @@ var PagerDisableCommands = map[string]string{
 	"cisco":  "terminal length 0",
 }
 
+// CLIErrorPatterns contains common CLI error patterns that indicate command failure
+var CLIErrorPatterns = []string{
+	"command not found",
+	"% unknown command",
+	"% invalid",
+	"% incomplete command",
+	"syntax error",
+	"unrecognized command",
+	"bad command",
+}
+
 // ExpectSession wraps google/goexpect for network equipment CLI interaction
 type ExpectSession struct {
 	expecter    *expect.GExpect
@@ -194,7 +205,23 @@ func (s *ExpectSession) Execute(command string) (string, error) {
 	// Clean up output: remove the command echo and trailing prompt
 	output = s.cleanOutput(output, command)
 
+	// Check for CLI error patterns in output
+	if err := s.checkCLIErrors(output); err != nil {
+		return output, err
+	}
+
 	return output, nil
+}
+
+// checkCLIErrors checks the output for common CLI error patterns
+func (s *ExpectSession) checkCLIErrors(output string) error {
+	outputLower := strings.ToLower(output)
+	for _, pattern := range CLIErrorPatterns {
+		if strings.Contains(outputLower, pattern) {
+			return fmt.Errorf("CLI error detected: %s", strings.TrimSpace(output))
+		}
+	}
+	return nil
 }
 
 // ExecuteBatch executes multiple commands in sequence
