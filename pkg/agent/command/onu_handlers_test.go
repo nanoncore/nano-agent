@@ -426,10 +426,10 @@ func TestParsePonPort_ValidFormats(t *testing.T) {
 			expectedPort: 1,
 		},
 		{
-			name:         "three part format - uses first two",
+			name:         "three part format (frame/slot/port) - uses slot and port",
 			ponPort:      "0/0/1",
 			expectedSlot: 0,
-			expectedPort: 0,
+			expectedPort: 1,
 		},
 		{
 			name:         "higher slot number",
