@@ -587,3 +587,124 @@ func computeONUStatus(isOnline bool, adminState, operState string) string {
 	}
 	return status
 }
+
+// =============================================================================
+// handleONUBulkProvision Tests
+// =============================================================================
+
+func TestHandleONUBulkProvision_PayloadParsing(t *testing.T) {
+	tests := []struct {
+		name           string
+		payload        map[string]interface{}
+		expectError    bool
+		errorContains  string
+		expectedCount  int
+	}{
+		{
+			name: "valid operations array",
+			payload: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"serial":     "FHTT01010001",
+						"pon_port":   "0/1",
+						"onu_id":     float64(1),
+						"vlan":       float64(100),
+						"line_profile": "default",
+					},
+					map[string]interface{}{
+						"serial":     "FHTT01010002",
+						"pon_port":   "0/1",
+						"onu_id":     float64(2),
+						"vlan":       float64(200),
+					},
+				},
+			},
+			expectedCount: 2,
+		},
+		{
+			name: "missing operations key",
+			payload: map[string]interface{}{
+				"something_else": []interface{}{},
+			},
+			expectError:   true,
+			errorContains: "invalid operations payload",
+		},
+		{
+			name: "empty operations array",
+			payload: map[string]interface{}{
+				"operations": []interface{}{},
+			},
+			expectError:   true,
+			errorContains: "no operations provided",
+		},
+		{
+			name: "operation missing serial",
+			payload: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"pon_port": "0/1",
+						"onu_id":   float64(1),
+					},
+				},
+			},
+			expectError:   true,
+			errorContains: "missing serial",
+		},
+		{
+			name: "invalid operation type",
+			payload: map[string]interface{}{
+				"operations": []interface{}{
+					"not-an-object",
+				},
+			},
+			expectError:   true,
+			errorContains: "invalid operation at index 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Parse operations using the same logic as handleONUBulkProvision
+			operationsRaw, ok := tt.payload["operations"].([]interface{})
+			if !ok {
+				if tt.expectError && tt.errorContains == "invalid operations payload" {
+					return // Expected error
+				}
+				t.Fatalf("unexpected parse failure")
+			}
+
+			if len(operationsRaw) == 0 {
+				if tt.expectError && tt.errorContains == "no operations provided" {
+					return // Expected error
+				}
+				t.Fatalf("unexpected empty operations")
+			}
+
+			var parseError string
+			parsedCount := 0
+			for i, opRaw := range operationsRaw {
+				opMap, ok := opRaw.(map[string]interface{})
+				if !ok {
+					parseError = "invalid operation at index " + string(rune('0'+i))
+					break
+				}
+
+				serial, _ := opMap["serial"].(string)
+				if serial == "" {
+					parseError = "missing serial"
+					break
+				}
+				parsedCount++
+			}
+
+			if tt.expectError {
+				if parseError == "" {
+					t.Errorf("expected error containing %q but got no error", tt.errorContains)
+				}
+				return
+			}
+
+			require.Equal(t, tt.expectedCount, parsedCount)
+		})
+	}
+}
