@@ -1,6 +1,7 @@
 package vsol
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/nanoncore/nano-agent/pkg/southbound/cli"
@@ -163,13 +164,9 @@ func TestParseVLANList(t *testing.T) {
 }
 
 func TestParseVSOLVLANList(t *testing.T) {
-	output := `
-VLAN Configuration:
-  VLAN ID    Name                 Description
-  -------    ----                 -----------
-  1          default              Default VLAN
-  100        DATA                 Data VLAN
-  200        VOICE                Voice VLAN
+	// Real V-SOL format is a space-separated list of VLAN IDs
+	output := `Created VLANs:
+            1   701   702
 `
 
 	vlans, err := parseVSOLVLANList(output)
@@ -181,8 +178,16 @@ VLAN Configuration:
 		t.Fatalf("len(vlans) = %d, want 3", len(vlans))
 	}
 
-	if vlans[0].ID != 1 || vlans[0].Name != "default" {
-		t.Errorf("vlans[0] = {ID: %d, Name: %s}, want {ID: 1, Name: default}", vlans[0].ID, vlans[0].Name)
+	// Check VLAN IDs are parsed correctly
+	expectedIDs := []int{1, 701, 702}
+	for i, expected := range expectedIDs {
+		if vlans[i].ID != expected {
+			t.Errorf("vlans[%d].ID = %d, want %d", i, vlans[i].ID, expected)
+		}
+		expectedName := fmt.Sprintf("vlan%d", expected)
+		if vlans[i].Name != expectedName {
+			t.Errorf("vlans[%d].Name = %s, want %s", i, vlans[i].Name, expectedName)
+		}
 	}
 }
 
@@ -368,6 +373,65 @@ Performance Counters:
 	}
 	if counters.CRCErrors != 1 {
 		t.Errorf("CRCErrors = %d, want 1", counters.CRCErrors)
+	}
+}
+
+func TestCountONUsFromOutput(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		want   int
+	}{
+		{
+			name: "two ONUs",
+			output: `Onuindex   Model                Profile                Mode    AuthInfo
+---------------------------------------------------------------------------------------------
+GPON0/1:1  unknown              AN5506-04-F1           sn      FHTT5929E410
+
+GPON0/1:2  HG6143D              AN5506-04-F1           sn      FHTT59CB8310
+`,
+			want: 2,
+		},
+		{
+			name: "empty with error",
+			output: `Onuindex   Model                Profile                Mode    AuthInfo
+---------------------------------------------------------------------------------------------
+
+Error: No related information to show. 62310`,
+			want: 0,
+		},
+		{
+			name: "single ONU",
+			output: `Onuindex   Model                Profile                Mode    AuthInfo
+---------------------------------------------------------------------------------------------
+GPON0/1:5  HG6143D              default                sn      VSOL12345678
+`,
+			want: 1,
+		},
+		{
+			name:   "empty output",
+			output: "",
+			want:   0,
+		},
+		{
+			name: "multiple ports",
+			output: `Onuindex   Model                Profile                Mode    AuthInfo
+---------------------------------------------------------------------------------------------
+GPON0/1:1  unknown              AN5506-04-F1           sn      FHTT5929E410
+GPON0/1:2  HG6143D              AN5506-04-F1           sn      FHTT59CB8310
+GPON0/1:3  Generic-ONU          default                sn      VSOL00000001
+`,
+			want: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := countONUsFromOutput(tt.output)
+			if got != tt.want {
+				t.Errorf("countONUsFromOutput() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
 

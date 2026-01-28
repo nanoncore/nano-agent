@@ -75,6 +75,7 @@ func (d *VSOLCLIDriver) Connect(ctx context.Context) error {
 }
 
 // AddONU provisions a new ONU on V-Sol OLT.
+// V-SOL CLI syntax: onu add <onu_id> profile <profile> sn <serial>
 func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest) error {
 	if req.SerialNumber == "" {
 		return fmt.Errorf("serial number is required")
@@ -87,25 +88,24 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
-	// Build ONU authorization command
-	cmdParts := []string{
-		fmt.Sprintf("onu %d", req.OnuID),
+	// Build ONU add command - V-SOL syntax: onu add <id> profile <profile> sn <serial>
+	profile := req.LineProfile
+	if profile == "" {
+		profile = "AN5506-04-F1" // Use common V-SOL profile if none specified
 	}
 
-	if req.Type != "" {
-		cmdParts = append(cmdParts, fmt.Sprintf("type %s", req.Type))
-	}
-
-	cmdParts = append(cmdParts, fmt.Sprintf("sn %s", req.SerialNumber))
-
-	cmd = strings.Join(cmdParts, " ")
+	cmd = fmt.Sprintf("onu add %d profile %s sn %s", req.OnuID, profile, req.SerialNumber)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to add ONU: %w", err)
 	}
 
-	if strings.Contains(strings.ToLower(output), "error") ||
-		strings.Contains(strings.ToLower(output), "fail") {
+	// Check for error indicators - V-SOL uses various error messages
+	outputLower := strings.ToLower(output)
+	if strings.Contains(outputLower, "error") ||
+		strings.Contains(outputLower, "fail") ||
+		strings.Contains(outputLower, "isn't existed") ||
+		strings.Contains(outputLower, "not exist") {
 		return fmt.Errorf("ONU add failed: %s", output)
 	}
 
@@ -117,13 +117,8 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		}
 	}
 
-	// Configure native VLAN if specified
-	if req.NativeVLAN > 0 {
-		cmd = fmt.Sprintf("onu %d vlan %d", req.OnuID, req.NativeVLAN)
-		if _, err := d.Execute(ctx, cmd); err != nil {
-			return fmt.Errorf("failed to configure VLAN: %w", err)
-		}
-	}
+	// Configure native VLAN if specified - V-SOL requires service port configuration
+	// This is handled separately with onu_service_port command if needed
 
 	// Configure service ports
 	for _, sp := range req.ServicePorts {
@@ -169,6 +164,91 @@ func (d *VSOLCLIDriver) DeleteONU(ctx context.Context, ponPort string, onuID int
 	}
 
 	return nil
+}
+
+// ONUBasicInfo holds minimal ONU information for duplicate detection.
+type ONUBasicInfo struct {
+	ID     int
+	Serial string
+}
+
+// ListONUs returns a list of existing ONU IDs on a given PON port.
+// This is used to find available ONU IDs for auto-assignment during provisioning.
+func (d *VSOLCLIDriver) ListONUs(ctx context.Context, ponPort string) ([]int, error) {
+	infos, err := d.ListONUsWithSerial(ctx, ponPort)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int, len(infos))
+	for i, info := range infos {
+		ids[i] = info.ID
+	}
+	return ids, nil
+}
+
+// ListONUsWithSerial returns a list of existing ONUs with their IDs and serial numbers.
+// This uses "show onu info all" which returns serial numbers in a single command.
+func (d *VSOLCLIDriver) ListONUsWithSerial(ctx context.Context, ponPort string) ([]ONUBasicInfo, error) {
+	serialMap, err := d.GetONUInfoAll(ctx, ponPort)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]ONUBasicInfo, 0, len(serialMap))
+	for id, serial := range serialMap {
+		result = append(result, ONUBasicInfo{ID: id, Serial: serial})
+	}
+	return result, nil
+}
+
+// GetONUInfoAll returns a map of ONU ID to serial number for all ONUs on a port.
+// This uses "show onu info all" which is more efficient than individual queries.
+func (d *VSOLCLIDriver) GetONUInfoAll(ctx context.Context, ponPort string) (map[int]string, error) {
+	// Enter GPON interface
+	cmd := fmt.Sprintf("interface gpon %s", ponPort)
+	if _, err := d.Execute(ctx, cmd); err != nil {
+		return nil, fmt.Errorf("failed to enter interface: %w", err)
+	}
+
+	// Get ONU info all - this includes serial numbers
+	// Format: Onuindex   Model                Profile                Mode    AuthInfo
+	//         GPON0/1:1  Generic-ONU          default                sn      VSOL00000001
+	output, err := d.Execute(ctx, "show onu info all")
+	if err != nil {
+		d.Execute(ctx, "exit") // Try to exit interface
+		return nil, fmt.Errorf("failed to get ONU info: %w", err)
+	}
+
+	// Exit interface
+	d.Execute(ctx, "exit")
+
+	// Parse ONU IDs and serials from output
+	result := make(map[int]string)
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "Onuindex") || strings.HasPrefix(line, "-") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 1 {
+			// Parse Onuindex format: GPON0/X:Y where Y is the ONU ID
+			onuIndex := fields[0]
+			if colonIdx := strings.LastIndex(onuIndex, ":"); colonIdx != -1 {
+				idStr := onuIndex[colonIdx+1:]
+				if id, err := strconv.Atoi(idStr); err == nil && id > 0 && id <= 128 {
+					// Serial is in the last column (AuthInfo)
+					serial := ""
+					if len(fields) >= 5 {
+						serial = strings.ToUpper(fields[4])
+					}
+					result[id] = serial
+				}
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // GetONUInfo retrieves ONU information via CLI.
@@ -519,29 +599,31 @@ func (d *VSOLCLIDriver) ListVLANs(ctx context.Context) ([]cli.VLANInfo, error) {
 }
 
 // parseVSOLVLANList parses V-Sol VLAN list output.
+// V-Sol format is a space-separated list of VLAN IDs:
+//
+//	Created VLANs:
+//	            1   701   702
 func parseVSOLVLANList(output string) ([]cli.VLANInfo, error) {
 	var vlans []cli.VLANInfo
 
-	// V-Sol format typically:
-	// VLAN ID    Name                    Description
-	// -------    ----                    -----------
-	// 1          default                 Default VLAN
-	// 100        DATA                    Data VLAN
-	vlanRegex := regexp.MustCompile(`^\s*(\d+)\s+(\S+)\s*(.*)$`)
-	lines := strings.Split(output, "\n")
+	// Extract all numbers from the output as VLAN IDs
+	// The format is: "Created VLANs:\n            1   701   702"
+	vlanIDRegex := regexp.MustCompile(`\b(\d+)\b`)
+	matches := vlanIDRegex.FindAllStringSubmatch(output, -1)
 
-	for _, line := range lines {
-		if matches := vlanRegex.FindStringSubmatch(line); len(matches) > 2 {
-			id, err := strconv.Atoi(matches[1])
-			if err != nil {
-				continue
-			}
-			vlans = append(vlans, cli.VLANInfo{
-				ID:          id,
-				Name:        strings.TrimSpace(matches[2]),
-				Description: strings.TrimSpace(matches[3]),
-			})
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
 		}
+		id, err := strconv.Atoi(match[1])
+		if err != nil {
+			continue
+		}
+		// V-Sol auto-generates VLAN names as "vlan<id>"
+		vlans = append(vlans, cli.VLANInfo{
+			ID:   id,
+			Name: fmt.Sprintf("vlan%d", id),
+		})
 	}
 
 	return vlans, nil
@@ -758,18 +840,75 @@ func (d *VSOLCLIDriver) AssignTrafficProfile(ctx context.Context, ponPort string
 // =============================================================================
 
 // ListPONPorts lists all PON ports on the device.
+// V-SOL OLTs don't have a command to list PON ports directly.
+// We enumerate ports 0/1 through 0/8 by trying to enter each interface.
 func (d *VSOLCLIDriver) ListPONPorts(ctx context.Context) ([]cli.PONPortInfo, error) {
-	// V-SOL GPON OLTs use "show pon info" to list ports
-	output, err := d.Execute(ctx, "show pon info")
-	if err != nil {
-		// Fallback to interface brief
-		output, err = d.Execute(ctx, "show interface gpon brief")
+	var ports []cli.PONPortInfo
+
+	// V-SOL OLTs typically have up to 8 PON ports (0/1 through 0/8)
+	for portNum := 1; portNum <= 8; portNum++ {
+		portName := fmt.Sprintf("0/%d", portNum)
+
+		// Try to enter the interface to check if it exists
+		cmd := fmt.Sprintf("interface gpon %s", portName)
+		output, err := d.Execute(ctx, cmd)
 		if err != nil {
-			return nil, fmt.Errorf("failed to list PON ports: %w", err)
+			continue // Port doesn't exist or error entering
 		}
+
+		// Check if the command was rejected (interface doesn't exist)
+		outputLower := strings.ToLower(output)
+		if strings.Contains(outputLower, "error") ||
+			strings.Contains(outputLower, "unknown") ||
+			strings.Contains(outputLower, "invalid") ||
+			strings.Contains(outputLower, "parameter error") {
+			continue // Interface doesn't exist
+		}
+
+		// We're now in interface mode - get ONU count from show onu info all
+		onuCount := 0
+		onuOutput, err := d.Execute(ctx, "show onu info all")
+		if err == nil {
+			onuCount = countONUsFromOutput(onuOutput)
+		}
+
+		// Exit the interface mode
+		d.Execute(ctx, "exit")
+
+		ports = append(ports, cli.PONPortInfo{
+			Slot:        0,
+			Port:        portNum,
+			Name:        portName,
+			Type:        "gpon",
+			Status:      "up",
+			AdminStatus: "enable",
+			ONUCount:    onuCount,
+		})
 	}
 
-	return parseVSOLPONPorts(output)
+	if len(ports) == 0 {
+		return nil, fmt.Errorf("no PON ports found")
+	}
+	return ports, nil
+}
+
+// countONUsFromOutput counts ONUs from "show onu info all" output.
+// V-SOL format: GPON0/X:Y where Y is the ONU ID
+func countONUsFromOutput(output string) int {
+	count := 0
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Skip header and separator lines
+		if line == "" || strings.HasPrefix(line, "Onuindex") || strings.HasPrefix(line, "-") {
+			continue
+		}
+		// Check if line starts with GPON (indicates an ONU entry)
+		if strings.HasPrefix(line, "GPON") {
+			count++
+		}
+	}
+	return count
 }
 
 // parseVSOLPONPorts parses V-Sol PON port list.
