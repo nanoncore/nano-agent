@@ -124,6 +124,11 @@ func (e *Executor) executeCommand(ctx context.Context, cmd agent.PendingCommand)
 		// Execute provisioning command with SNMP verification capability
 		result, err = e.dispatchProvisioning(ctx, driver, driverV2, cmd)
 		if err != nil {
+			// For bulk operations, we may have partial results even on error
+			// Push the result with the error so the UI can show details
+			if result != nil {
+				return e.pushErrorWithResult(cmd.ID, startTime, err, result)
+			}
 			return e.pushError(cmd.ID, startTime, err)
 		}
 		goto pushResult
@@ -188,6 +193,24 @@ func (e *Executor) pushError(commandID string, startTime time.Time, err error) e
 	if pushErr != nil {
 		log.Printf("[command] Failed to push error result for command %s: %v", commandID, pushErr)
 	}
+	return err
+}
+
+// pushErrorWithResult is a helper to push an error result that includes partial results.
+// This is used for bulk operations where some items may have succeeded before a failure.
+func (e *Executor) pushErrorWithResult(commandID string, startTime time.Time, err error, result map[string]interface{}) error {
+	duration := time.Since(startTime)
+	resultReq := &agent.CommandResultRequest{
+		Success:    false,
+		Error:      err.Error(),
+		Result:     result,
+		DurationMs: duration.Milliseconds(),
+	}
+	_, pushErr := e.client.PushCommandResult(commandID, resultReq)
+	if pushErr != nil {
+		log.Printf("[command] Failed to push error result with data for command %s: %v", commandID, pushErr)
+	}
+	log.Printf("[command] Command %s failed with partial results: %v (duration: %v)", commandID, err, duration)
 	return err
 }
 
@@ -412,7 +435,7 @@ func (e *Executor) dispatch(ctx context.Context, driver cli.CLIDriver, cmd agent
 // that benefits from SNMP-based verification after CLI execution.
 func isProvisioningCommand(cmdType string) bool {
 	switch cmdType {
-	case "onu_suspend", "onu_resume", "onu_provision", "onu_delete", "onu_update", "onu_reboot":
+	case "onu_suspend", "onu_resume", "onu_provision", "onu_delete", "onu_update", "onu_reboot", "onu_bulk_provision":
 		return true
 	default:
 		return false
@@ -435,6 +458,8 @@ func (e *Executor) dispatchProvisioning(ctx context.Context, driver cli.CLIDrive
 		return e.handleONUUpdateWithVerification(ctx, driver, driverV2, cmd)
 	case "onu_reboot":
 		return e.handleONURebootWithVerification(ctx, driver, driverV2, cmd)
+	case "onu_bulk_provision":
+		return e.handleONUBulkProvisionWithVerification(ctx, driver, driverV2, cmd)
 	default:
 		// Fallback to regular dispatch without SNMP verification
 		return e.dispatch(ctx, driver, cmd)

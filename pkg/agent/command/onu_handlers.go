@@ -1145,3 +1145,456 @@ func (e *Executor) handleONURebootWithVerification(ctx context.Context, driver c
 	// Delegate to the existing handler - reboot has its own verification logic
 	return e.handleONUReboot(ctx, driver, cmd)
 }
+
+// =============================================================================
+// Bulk Provisioning Handler
+// =============================================================================
+
+// handleONUBulkProvision provisions multiple ONUs using the DriverV2 BulkProvision method.
+// This is significantly more efficient than individual provisioning as it reuses a single
+// SSH/CLI session for all operations.
+func (e *Executor) handleONUBulkProvision(ctx context.Context, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	// Extract operations from payload
+	operationsRaw, ok := cmd.Payload["operations"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid operations payload: expected array")
+	}
+
+	if len(operationsRaw) == 0 {
+		return nil, fmt.Errorf("no operations provided")
+	}
+
+	slog.Info("starting bulk provision", "count", len(operationsRaw), "equipment", cmd.EquipmentID)
+
+	// Convert payload to BulkProvisionOp slice
+	operations := make([]types.BulkProvisionOp, 0, len(operationsRaw))
+	for i, opRaw := range operationsRaw {
+		opMap, ok := opRaw.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("invalid operation at index %d: expected object", i)
+		}
+
+		serial, _ := opMap["serial"].(string)
+		if serial == "" {
+			return nil, fmt.Errorf("operation at index %d missing serial", i)
+		}
+
+		ponPort, _ := opMap["pon_port"].(string)
+		onuIDFloat, _ := opMap["onu_id"].(float64)
+		onuID := int(onuIDFloat)
+
+		// Build profile from payload fields
+		lineProfile, _ := opMap["line_profile"].(string)
+		serviceProfile, _ := opMap["service_profile"].(string)
+		vlanFloat, _ := opMap["vlan"].(float64)
+		vlan := int(vlanFloat)
+		bandwidthUpFloat, _ := opMap["bandwidth_up_kbps"].(float64)
+		bandwidthUp := int(bandwidthUpFloat)
+		bandwidthDownFloat, _ := opMap["bandwidth_down_kbps"].(float64)
+		bandwidthDown := int(bandwidthDownFloat)
+
+		// Create the profile if any profile fields are set
+		var profile *types.ONUProfile
+		if lineProfile != "" || serviceProfile != "" || vlan > 0 || bandwidthUp > 0 || bandwidthDown > 0 {
+			profile = &types.ONUProfile{
+				LineProfile:    lineProfile,
+				ServiceProfile: serviceProfile,
+				VLAN:           vlan,
+				BandwidthUp:    bandwidthUp,
+				BandwidthDown:  bandwidthDown,
+			}
+		}
+
+		operations = append(operations, types.BulkProvisionOp{
+			Serial:  serial,
+			PONPort: ponPort,
+			ONUID:   onuID,
+			Profile: profile,
+		})
+	}
+
+	// Call driver BulkProvision
+	result, err := driverV2.BulkProvision(ctx, operations)
+	if err != nil {
+		return nil, fmt.Errorf("bulk provision failed: %w", err)
+	}
+
+	slog.Info("bulk provision completed",
+		"succeeded", result.Succeeded,
+		"failed", result.Failed,
+		"total", len(operations))
+
+	// Convert results to response format
+	results := make([]map[string]interface{}, 0, len(result.Results))
+	for _, r := range result.Results {
+		resultMap := map[string]interface{}{
+			"serial":  r.Serial,
+			"success": r.Success,
+		}
+		if r.Error != "" {
+			resultMap["error"] = r.Error
+		}
+		if r.ErrorCode != "" {
+			resultMap["error_code"] = r.ErrorCode
+		}
+		if r.ONUID > 0 {
+			resultMap["onu_id"] = r.ONUID
+		}
+		if r.PONPort != "" {
+			resultMap["pon_port"] = r.PONPort
+		}
+		results = append(results, resultMap)
+	}
+
+	// Push individual ONU updates for successful provisions
+	for _, r := range result.Results {
+		if r.Success {
+			e.pushONUUpdate(cmd.EquipmentID, r.Serial, r.PONPort, r.ONUID, "online", nil)
+		}
+	}
+
+	response := map[string]interface{}{
+		"total":           len(operations),
+		"succeeded":       result.Succeeded,
+		"failed":          result.Failed,
+		"results":         results,
+		"immediateUpdate": true,
+	}
+
+	// Return error if all operations failed
+	if result.Succeeded == 0 && result.Failed > 0 {
+		return response, fmt.Errorf("all %d provisions failed", result.Failed)
+	}
+
+	return response, nil
+}
+
+// handleONUBulkProvisionWithVerification provisions multiple ONUs and verifies via SNMP.
+// This handler uses the DriverV2 BulkProvision method which reuses a single CLI session.
+// Note: BulkProvision requires a CLI-based southbound driver, not SNMP.
+func (e *Executor) handleONUBulkProvisionWithVerification(ctx context.Context, driver cli.CLIDriver, driverV2 types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	// For bulk provisioning, we need to use the southbound driver's BulkProvision method
+	// which requires CLI protocol. The passed driverV2 might be SNMP-based (for reads),
+	// so we need to check if it supports CLI operations.
+
+	// First try to use the existing driverV2 for bulk provision
+	result, err := e.handleONUBulkProvision(ctx, driverV2, cmd)
+	if err != nil {
+		// If bulk provision failed due to CLI executor, fall back to sequential provisioning
+		// using the nano-agent's CLI driver
+		if driverV2 == nil || strings.Contains(err.Error(), "CLI executor not available") {
+			slog.Info("bulk provision via southbound driver failed, using sequential CLI provisioning", "error", err)
+			return e.handleONUBulkProvisionSequential(ctx, driver, cmd)
+		}
+		return nil, err
+	}
+
+	// Verify provisioned ONUs via SNMP if available
+	if driverV2 != nil {
+		// Get the list of ONUs after provisioning
+		onus, err := driverV2.GetONUList(ctx, nil)
+		if err != nil {
+			slog.Warn("failed to get ONU list for verification", "error", err)
+			// Don't fail the operation - provisioning itself succeeded
+			return result, nil
+		}
+
+		// Create a map for quick lookup
+		onuBySerial := make(map[string]types.ONUInfo)
+		for _, onu := range onus {
+			onuBySerial[onu.Serial] = onu
+		}
+
+		// Update results with verification status
+		if results, ok := result["results"].([]map[string]interface{}); ok {
+			verifiedCount := 0
+			for _, r := range results {
+				if success, _ := r["success"].(bool); success {
+					serial, _ := r["serial"].(string)
+					if onu, found := onuBySerial[serial]; found {
+						r["verified"] = true
+						r["admin_state"] = onu.AdminState
+						r["oper_state"] = onu.OperState
+						verifiedCount++
+					} else {
+						r["verified"] = false
+					}
+				}
+			}
+			result["verified_count"] = verifiedCount
+			slog.Info("bulk provision verification completed",
+				"verified", verifiedCount,
+				"succeeded", result["succeeded"])
+		}
+	}
+
+	return result, nil
+}
+
+// ONUBasicInfo holds minimal ONU information for duplicate detection.
+type ONUBasicInfo struct {
+	ID     int
+	Serial string
+}
+
+// handleONUBulkProvisionSequential provisions ONUs sequentially using the nano-agent's CLI driver.
+// This is a fallback when the southbound driver's BulkProvision is not available.
+// It's slower than true bulk provisioning but still reuses the same SSH session.
+// It also detects duplicate serial numbers and skips already-provisioned ONUs.
+func (e *Executor) handleONUBulkProvisionSequential(ctx context.Context, driver cli.CLIDriver, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	// Extract operations from payload
+	operationsRaw, ok := cmd.Payload["operations"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid operations payload: expected array")
+	}
+
+	if len(operationsRaw) == 0 {
+		return nil, fmt.Errorf("no operations provided")
+	}
+
+	slog.Info("starting sequential bulk provision", "count", len(operationsRaw), "equipment", cmd.EquipmentID)
+
+	results := make([]map[string]interface{}, 0, len(operationsRaw))
+	succeeded := 0
+	failed := 0
+	skipped := 0
+
+	// Query existing ONUs to find used IDs and existing serials per port
+	usedOnuIDs := make(map[string]map[int]bool)       // port -> set of used ONU IDs
+	existingSerials := make(map[string]ONUBasicInfo)  // serial -> ONU info (for duplicate detection)
+
+	// Collect unique ports from operations
+	uniquePorts := make(map[string]bool)
+	for _, opRaw := range operationsRaw {
+		if opMap, ok := opRaw.(map[string]interface{}); ok {
+			port, _ := opMap["pon_port"].(string)
+			if port == "" {
+				port = "0/1" // Default port
+			}
+			uniquePorts[port] = true
+		}
+	}
+
+	// Try to list existing ONUs with serials for duplicate detection
+	// First try ListONUsWithSerial which is more efficient (single command)
+	type onuWithSerial interface {
+		ListONUsWithSerial(ctx context.Context, ponPort string) ([]struct{ ID int; Serial string }, error)
+	}
+
+	for port := range uniquePorts {
+		usedOnuIDs[port] = make(map[int]bool)
+
+		// Try different methods to get ONU list with serials
+		var ids []int
+		var serials map[int]string = make(map[int]string)
+
+		// Method 1: Try ListONUs first to get IDs
+		if onuLister, ok := driver.(interface {
+			ListONUs(ctx context.Context, ponPort string) ([]int, error)
+		}); ok {
+			foundIDs, err := onuLister.ListONUs(ctx, port)
+			if err != nil {
+				slog.Warn("failed to list ONUs on port", "port", port, "error", err)
+				continue
+			}
+			ids = foundIDs
+			for _, id := range ids {
+				usedOnuIDs[port][id] = true
+			}
+		}
+
+		// Method 2: Try to get serials via GetONUInfoAll (single command for all ONUs)
+		if infoAllGetter, ok := driver.(interface {
+			GetONUInfoAll(ctx context.Context, ponPort string) (map[int]string, error)
+		}); ok {
+			slog.Info("driver supports GetONUInfoAll, using efficient bulk serial fetch")
+			serialMap, err := infoAllGetter.GetONUInfoAll(ctx, port)
+			if err == nil {
+				serials = serialMap
+				// Also update IDs in case ListONUs missed some
+				for id := range serialMap {
+					usedOnuIDs[port][id] = true
+				}
+			} else {
+				slog.Warn("GetONUInfoAll failed", "port", port, "error", err)
+			}
+		}
+
+		// Add serials to existingSerials map
+		for id, serial := range serials {
+			if serial != "" {
+				upperSerial := strings.ToUpper(serial)
+				existingSerials[upperSerial] = ONUBasicInfo{
+					ID:     id,
+					Serial: serial,
+				}
+				slog.Debug("found existing ONU", "port", port, "id", id, "serial", upperSerial)
+			}
+		}
+
+		// Log first few serials for debugging
+		var sampleSerials []string
+		for serial := range existingSerials {
+			sampleSerials = append(sampleSerials, serial)
+			if len(sampleSerials) >= 5 {
+				break
+			}
+		}
+		slog.Info("found existing ONUs", "port", port, "count", len(usedOnuIDs[port]), "serialsFound", len(existingSerials), "sampleSerials", sampleSerials)
+	}
+
+	if len(usedOnuIDs) == 0 {
+		slog.Warn("driver does not support ListONUs, cannot auto-detect used ONU IDs or duplicates", "driverType", fmt.Sprintf("%T", driver))
+	}
+
+	// Track next available ONU ID per port for auto-assignment
+	nextOnuID := make(map[string]int)
+
+	// Helper to find next available ONU ID for a port
+	findNextAvailableID := func(port string) int {
+		if _, exists := nextOnuID[port]; !exists {
+			nextOnuID[port] = 1
+		}
+		used := usedOnuIDs[port]
+		for id := nextOnuID[port]; id <= 128; id++ {
+			if used == nil || !used[id] {
+				nextOnuID[port] = id + 1
+				return id
+			}
+		}
+		return 0 // No available ID
+	}
+
+	for i, opRaw := range operationsRaw {
+		opMap, ok := opRaw.(map[string]interface{})
+		if !ok {
+			results = append(results, map[string]interface{}{
+				"serial":  fmt.Sprintf("operation_%d", i),
+				"success": false,
+				"error":   "invalid operation format",
+			})
+			failed++
+			continue
+		}
+
+		serial, _ := opMap["serial"].(string)
+		if serial == "" {
+			results = append(results, map[string]interface{}{
+				"serial":  fmt.Sprintf("operation_%d", i),
+				"success": false,
+				"error":   "missing serial",
+			})
+			failed++
+			continue
+		}
+
+		// Check if this serial already exists (duplicate detection)
+		serialUpper := strings.ToUpper(serial)
+		slog.Info("checking for duplicate", "serial", serialUpper, "existingSerialsCount", len(existingSerials))
+		if existingONU, exists := existingSerials[serialUpper]; exists {
+			results = append(results, map[string]interface{}{
+				"serial":       serial,
+				"success":      false,
+				"skipped":      true,
+				"error":        "ONU already exists",
+				"error_code":   "ALREADY_EXISTS",
+				"existing_id":  existingONU.ID,
+			})
+			// Count as failed - user wanted to provision but couldn't
+			failed++
+			slog.Info("failed duplicate ONU", "serial", serial, "existingId", existingONU.ID)
+			continue
+		} else {
+			slog.Info("serial not found in existing", "serial", serialUpper)
+		}
+
+		ponPort, _ := opMap["pon_port"].(string)
+		if ponPort == "" {
+			ponPort = "0/1" // Default PON port
+		}
+
+		onuIDFloat, _ := opMap["onu_id"].(float64)
+		onuID := int(onuIDFloat)
+
+		// Auto-assign ONU ID if not provided or invalid (0)
+		if onuID <= 0 {
+			onuID = findNextAvailableID(ponPort)
+			if onuID == 0 {
+				results = append(results, map[string]interface{}{
+					"serial":  serial,
+					"success": false,
+					"error":   "no available ONU ID on port " + ponPort,
+				})
+				failed++
+				continue
+			}
+		}
+
+		// Mark this ID as used for subsequent operations
+		if usedOnuIDs[ponPort] == nil {
+			usedOnuIDs[ponPort] = make(map[int]bool)
+		}
+		usedOnuIDs[ponPort][onuID] = true
+
+		// Also mark the serial as existing to prevent duplicates within the same batch
+		existingSerials[serialUpper] = ONUBasicInfo{ID: onuID, Serial: serial}
+
+		lineProfile, _ := opMap["line_profile"].(string)
+		serviceProfile, _ := opMap["service_profile"].(string)
+		vlanFloat, _ := opMap["vlan"].(float64)
+		vlan := int(vlanFloat)
+
+		// Create provision request
+		req := &cli.ONUProvisionRequest{
+			PonPort:        ponPort,
+			OnuID:          onuID,
+			SerialNumber:   serial,
+			LineProfile:    lineProfile,
+			ServiceProfile: serviceProfile,
+			NativeVLAN:     vlan,
+		}
+
+		// Provision the ONU
+		err := driver.AddONU(ctx, req)
+		resultMap := map[string]interface{}{
+			"serial":   serial,
+			"pon_port": ponPort,
+			"onu_id":   onuID,
+		}
+
+		if err != nil {
+			resultMap["success"] = false
+			resultMap["error"] = err.Error()
+			failed++
+			slog.Warn("failed to provision ONU", "serial", serial, "error", err)
+		} else {
+			resultMap["success"] = true
+			succeeded++
+			// Push immediate update
+			e.pushONUUpdate(cmd.EquipmentID, serial, ponPort, onuID, "online", nil)
+			slog.Info("provisioned ONU", "serial", serial, "ponPort", ponPort, "onuId", onuID)
+		}
+
+		results = append(results, resultMap)
+	}
+
+	slog.Info("sequential bulk provision completed", "succeeded", succeeded, "failed", failed, "skipped", skipped)
+
+	result := map[string]interface{}{
+		"total":           len(operationsRaw),
+		"succeeded":       succeeded,
+		"failed":          failed,
+		"skipped":         skipped, // Keep for informational purposes
+		"results":         results,
+		"immediateUpdate": true,
+		"method":          "sequential", // Indicate fallback was used
+	}
+
+	// Return error if any operations failed (so history shows correct status)
+	// The result data is still available for the UI to display details
+	if failed > 0 {
+		return result, fmt.Errorf("%d of %d provisions failed", failed, len(operationsRaw))
+	}
+
+	return result, nil
+}
