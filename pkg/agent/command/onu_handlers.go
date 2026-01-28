@@ -606,6 +606,65 @@ func (e *Executor) handleONUDiscover(ctx context.Context, driver cli.CLIDriver, 
 	}, nil
 }
 
+// handleONUDiscoverV2 discovers unprovisioned ONUs using DriverV2.
+// Uses vendor-specific DiscoverONUs (e.g., "show onu auto-find" on V-SOL).
+// Unprovisioned ONUs don't have an ONU ID and are only visible via auto-find.
+func (e *Executor) handleONUDiscoverV2(ctx context.Context, driver types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	ponPorts := extractPonPortsFilter(cmd.Payload)
+
+	discoveries, err := driver.DiscoverONUs(ctx, ponPorts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover ONUs: %w", err)
+	}
+
+	onus := make([]map[string]interface{}, 0, len(discoveries))
+	for _, d := range discoveries {
+		onus = append(onus, discoveryToMap(d))
+	}
+
+	return map[string]interface{}{
+		"onus":  onus,
+		"count": len(onus),
+	}, nil
+}
+
+// extractPonPortsFilter extracts PON port filter from command payload.
+func extractPonPortsFilter(payload map[string]interface{}) []string {
+	ponPortsRaw, _ := payload["ponPorts"].([]interface{})
+	var ponPorts []string
+	for _, p := range ponPortsRaw {
+		if ps, ok := p.(string); ok {
+			ponPorts = append(ponPorts, ps)
+		}
+	}
+	return ponPorts
+}
+
+// discoveryToMap converts an ONUDiscovery to a map for JSON response.
+func discoveryToMap(d types.ONUDiscovery) map[string]interface{} {
+	m := map[string]interface{}{
+		"serial":       d.Serial,
+		"ponPort":      d.PONPort,
+		"discoveredAt": d.DiscoveredAt,
+	}
+	if d.MAC != "" {
+		m["mac"] = d.MAC
+	}
+	if d.Model != "" {
+		m["model"] = d.Model
+	}
+	if d.State != "" {
+		m["state"] = d.State
+	}
+	if d.DistanceM > 0 {
+		m["distance"] = d.DistanceM
+	}
+	if d.RxPowerDBm != 0 {
+		m["rxPower"] = d.RxPowerDBm
+	}
+	return m
+}
+
 // handleONUUpdate updates an existing ONU's configuration.
 func (e *Executor) handleONUUpdate(ctx context.Context, driver cli.CLIDriver, cmd agent.PendingCommand) (map[string]interface{}, error) {
 	ponPort, _ := cmd.Payload["ponPort"].(string)

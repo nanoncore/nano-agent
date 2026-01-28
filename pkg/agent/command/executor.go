@@ -98,6 +98,22 @@ func (e *Executor) executeCommand(ctx context.Context, cmd agent.PendingCommand)
 		}
 	}
 
+	// 3b. For onu_discover, use CLI-based DriverV2 (requires CLI for "show onu auto-find")
+	if cmd.Type == "onu_discover" {
+		sbDriver, driverV2, err := e.createSouthboundDriverCLI(ctx, oltConfig)
+		if err != nil {
+			log.Printf("[command] CLI southbound driver unavailable, using CLI fallback: %v", err)
+		} else {
+			result, err = e.handleONUDiscoverV2(ctx, driverV2, cmd)
+			_ = sbDriver.Disconnect(ctx)
+			if err != nil {
+				log.Printf("[command] DriverV2 onu_discover failed, using CLI fallback: %v", err)
+			} else {
+				goto pushResult
+			}
+		}
+	}
+
 	// 4. For provisioning commands, use CLI for execution + SNMP for verification
 	if isProvisioningCommand(cmd.Type) {
 		// Create CLI driver for command execution
@@ -289,6 +305,62 @@ func (e *Executor) createSouthboundDriver(ctx context.Context, oltConfig agent.O
 	if !ok {
 		_ = driver.Disconnect(ctx)
 		return nil, nil, fmt.Errorf("southbound driver does not support DriverV2 interface")
+	}
+
+	return driver, driverV2, nil
+}
+
+// createSouthboundDriverCLI creates a CLI-based southbound driver.
+// Used for operations that require CLI access (e.g., onu_discover uses "show onu auto-find").
+func (e *Executor) createSouthboundDriverCLI(ctx context.Context, oltConfig agent.OLTConfig) (southbound.Driver, types.DriverV2, error) {
+	vendor := southbound.Vendor(strings.ToLower(oltConfig.Vendor))
+
+	// Force CLI protocol for CLI-dependent operations
+	config := &southbound.EquipmentConfig{
+		Address:  oltConfig.Address,
+		Vendor:   vendor,
+		Protocol: southbound.ProtocolCLI,
+		Port:     oltConfig.Protocols.SSH.Port,
+		Username: oltConfig.Protocols.SSH.Username,
+		Password: oltConfig.Protocols.SSH.Password,
+	}
+
+	// Also set SNMP config so the adapter can create a secondary SNMP driver for monitoring
+	if oltConfig.Protocols.SNMP.Enabled {
+		config.SecondaryPort = oltConfig.Protocols.SNMP.Port
+		config.SNMPCommunity = oltConfig.Protocols.SNMP.Community
+		config.SNMPVersion = oltConfig.Protocols.SNMP.Version
+	}
+
+	driver, err := southbound.NewDriver(vendor, southbound.ProtocolCLI, config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create CLI southbound driver: %w", err)
+	}
+
+	typesConfig := &types.EquipmentConfig{
+		Name:          oltConfig.Name,
+		Type:          types.EquipmentTypeOLT,
+		Vendor:        types.Vendor(vendor),
+		Address:       oltConfig.Address,
+		Port:          config.Port,
+		Protocol:      types.ProtocolCLI,
+		Username:      config.Username,
+		Password:      config.Password,
+		SecondaryPort: config.SecondaryPort,
+		SNMPCommunity: config.SNMPCommunity,
+		SNMPVersion:   config.SNMPVersion,
+		Metadata:      make(map[string]string),
+		Timeout:       30 * time.Second,
+	}
+
+	if err := driver.Connect(ctx, typesConfig); err != nil {
+		return nil, nil, fmt.Errorf("failed to connect CLI southbound driver: %w", err)
+	}
+
+	driverV2, ok := driver.(types.DriverV2)
+	if !ok {
+		_ = driver.Disconnect(ctx)
+		return nil, nil, fmt.Errorf("CLI southbound driver does not support DriverV2 interface")
 	}
 
 	return driver, driverV2, nil
