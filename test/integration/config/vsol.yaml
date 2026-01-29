@@ -1,0 +1,21 @@
+# V-SOL OLT Simulator Configuration for CI Testing
+rest_port: 8080
+log_level: INFO
+persist_state: false
+
+olts:
+  - device_id: vsol-olt-ci
+    device_type: vsol.epon
+    vendor: vsol
+    model: v2.1.6r
+    firmware_version: v2.1.6r
+    ssh_port: 2222
+    snmp_port: 161
+    snmp_community_get: public
+    snmp_community_set: private
+    ssh_username: admin
+    ssh_password: admin
+    protocols:
+      - snmp
+      - ssh
+    seed_file: /app/olt_simulator/config/seed_data_vsol.yaml

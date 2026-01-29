@@ -28,4 +28,4 @@ require (
 )
 
 // Local development: uncomment the line below to use local nano-southbound
-// replace github.com/nanoncore/nano-southbound => ../nano-southbound
+replace github.com/nanoncore/nano-southbound => ../nano-southbound

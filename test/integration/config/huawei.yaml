@@ -1,0 +1,21 @@
+# Huawei OLT Simulator Configuration for CI Testing
+rest_port: 8080
+log_level: INFO
+persist_state: false
+
+olts:
+  - device_id: huawei-olt-ci
+    device_type: huawei.smartax
+    vendor: huawei
+    model: ma5800
+    firmware_version: v8r19c10
+    ssh_port: 2223
+    snmp_port: 162
+    snmp_community_get: public
+    snmp_community_set: private
+    ssh_username: admin
+    ssh_password: admin
+    protocols:
+      - snmp
+      - ssh
+    seed_file: /app/olt_simulator/config/seed_data_huawei.yaml

@@ -1,0 +1,52 @@
+# Docker Compose for nano-agent Integration Tests
+# Usage:
+#   docker compose -f docker-compose.ci.yml --profile vsol up -d
+#   docker compose -f docker-compose.ci.yml --profile huawei up -d
+#   docker compose -f docker-compose.ci.yml --profile all up -d
+
+services:
+  # V-SOL OLT Simulator
+  olt-simulator-vsol:
+    image: ${OLT_SIMULATOR_IMAGE:-olt-simulator:ci}
+    container_name: olt-simulator-vsol-ci
+    environment:
+      OLT_MULTI_OLT_CONFIG: /app/config/multi-olt.yaml
+      OLT_LOG_LEVEL: INFO
+    ports:
+      - "8888:8080"     # REST API
+      - "2222:2222"     # SSH
+      - "161:161/udp"   # SNMP
+    volumes:
+      - ./config/vsol.yaml:/app/config/multi-olt.yaml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    profiles:
+      - vsol
+      - all
+
+  # Huawei OLT Simulator
+  olt-simulator-huawei:
+    image: ${OLT_SIMULATOR_IMAGE:-olt-simulator:ci}
+    container_name: olt-simulator-huawei-ci
+    environment:
+      OLT_MULTI_OLT_CONFIG: /app/config/multi-olt.yaml
+      OLT_LOG_LEVEL: INFO
+    ports:
+      - "8889:8080"     # REST API (different port to avoid conflict)
+      - "2223:2223"     # SSH
+      - "162:162/udp"   # SNMP
+    volumes:
+      - ./config/huawei.yaml:/app/config/multi-olt.yaml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    profiles:
+      - huawei
+      - all
