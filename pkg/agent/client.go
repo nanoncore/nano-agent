@@ -817,6 +817,11 @@ type ONUData struct {
 
 	// Vendor detection
 	Vendor string `json:"vendor,omitempty"`
+
+	// Profile and VLAN (from ONU list/detail)
+	LineProfile    string `json:"lineProfile,omitempty"`
+	ServiceProfile string `json:"serviceProfile,omitempty"`
+	VLAN           int    `json:"vlan,omitempty"`
 }
 
 // PushONUsRequest is the request body for pushing ONUs to the control plane.
