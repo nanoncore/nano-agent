@@ -161,8 +161,7 @@ jobs:
       - name: Download OLT Simulator image (if built)
         if: ${{ github.event.inputs.build_simulator == 'true' }}
         uses: actions/download-artifact@v4
-        with:
-          name: olt-simulator-image
+gre          name: olt-simulator-image
           path: /tmp
         continue-on-error: true
 
