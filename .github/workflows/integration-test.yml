@@ -1,0 +1,408 @@
+# Integration Tests for nano-agent
+# Tests nano-agent commands against OLT simulators (V-SOL and Huawei)
+#
+# This workflow can run in two modes:
+# 1. Using pre-built olt-simulator image from GHCR (default, faster)
+# 2. Building olt-simulator from source (set build_simulator=true)
+
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      vendor:
+        description: 'Vendor to test (vsol, huawei, or all)'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - vsol
+          - huawei
+      skip_write:
+        description: 'Skip write operation tests'
+        required: false
+        default: false
+        type: boolean
+      build_simulator:
+        description: 'Build OLT simulator from source instead of using pre-built image'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  GO_VERSION: '1.24'
+  GOPRIVATE: 'github.com/nanoncore/*'
+  # Default to GHCR image, can be overridden
+  OLT_SIMULATOR_IMAGE: ghcr.io/nanoncore/olt-simulator:latest
+
+jobs:
+  # ==========================================================================
+  # Build nano-agent
+  # ==========================================================================
+  build:
+    name: Build nano-agent
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout nano-agent
+        uses: actions/checkout@v4
+        with:
+          path: nano-agent
+
+      - name: Checkout nano-southbound
+        uses: actions/checkout@v4
+        with:
+          repository: nanoncore/nano-southbound
+          path: nano-southbound
+          # Use GH_PAT for private repos, fallback to GITHUB_TOKEN for same-org repos
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: nano-agent/go.sum
+
+      - name: Configure replace directive
+        run: |
+          cd nano-agent
+          # Ensure replace directive points to sibling directory
+          if ! grep -q '^replace github.com/nanoncore/nano-southbound' go.mod; then
+            echo 'replace github.com/nanoncore/nano-southbound => ../nano-southbound' >> go.mod
+          fi
+          cat go.mod
+
+      - name: Download dependencies
+        run: |
+          cd nano-agent
+          go mod download
+
+      - name: Build nano-agent
+        run: |
+          cd nano-agent
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o nano-agent ./cmd/nano-agent
+          chmod +x nano-agent
+          ./nano-agent version
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: nano-agent-binary
+          path: nano-agent/nano-agent
+          retention-days: 1
+
+  # ==========================================================================
+  # Build OLT Simulator (only if requested or GHCR image unavailable)
+  # ==========================================================================
+  build-simulator:
+    name: Build OLT Simulator
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.build_simulator == 'true' }}
+    steps:
+      - name: Checkout olt-simulator
+        uses: actions/checkout@v4
+        with:
+          repository: nanoncore/olt-simulator
+          path: olt-simulator
+          # Use GH_PAT for private repos, fallback to GITHUB_TOKEN for same-org repos
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build OLT Simulator image
+        uses: docker/build-push-action@v6
+        with:
+          context: olt-simulator
+          push: false
+          tags: olt-simulator:ci
+          outputs: type=docker,dest=/tmp/olt-simulator.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: olt-simulator-image
+          path: /tmp/olt-simulator.tar
+          retention-days: 1
+
+  # ==========================================================================
+  # Integration tests per vendor
+  # ==========================================================================
+  integration-test:
+    name: Test (${{ matrix.vendor }})
+    needs: [build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vendor: [vsol, huawei]
+
+    steps:
+      - name: Checkout nano-agent (for test scripts)
+        uses: actions/checkout@v4
+
+      - name: Download nano-agent binary
+        uses: actions/download-artifact@v4
+        with:
+          name: nano-agent-binary
+          path: ./
+
+      - name: Make binary executable
+        run: chmod +x ./nano-agent
+
+      # Option 1: Load locally built image (if build_simulator was true)
+      - name: Download OLT Simulator image (if built)
+        if: ${{ github.event.inputs.build_simulator == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: olt-simulator-image
+          path: /tmp
+        continue-on-error: true
+
+      - name: Load OLT Simulator image (if built)
+        if: ${{ github.event.inputs.build_simulator == 'true' }}
+        run: |
+          if [[ -f /tmp/olt-simulator.tar ]]; then
+            docker load -i /tmp/olt-simulator.tar
+            echo "OLT_SIMULATOR_IMAGE=olt-simulator:ci" >> $GITHUB_ENV
+          fi
+        continue-on-error: true
+
+      # Option 2: Pull from GHCR (default)
+      - name: Login to GitHub Container Registry
+        if: ${{ github.event.inputs.build_simulator != 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Pull OLT Simulator from GHCR
+        if: ${{ github.event.inputs.build_simulator != 'true' }}
+        run: |
+          echo "Pulling OLT Simulator image from GHCR..."
+          docker pull ${{ env.OLT_SIMULATOR_IMAGE }} || {
+            echo "::warning::Failed to pull from GHCR, will try to build from source"
+            echo "BUILD_FALLBACK=true" >> $GITHUB_ENV
+          }
+
+      # Fallback: Build from source if GHCR pull fails
+      - name: Checkout olt-simulator (fallback)
+        if: env.BUILD_FALLBACK == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: nanoncore/olt-simulator
+          path: olt-simulator
+          # Use GH_PAT for private repos, fallback to GITHUB_TOKEN for same-org repos
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Build OLT Simulator (fallback)
+        if: env.BUILD_FALLBACK == 'true'
+        run: |
+          cd olt-simulator
+          docker build -t olt-simulator:ci .
+          echo "OLT_SIMULATOR_IMAGE=olt-simulator:ci" >> $GITHUB_ENV
+
+      - name: Start OLT Simulator
+        run: |
+          cd test/integration
+
+          # Create config directory if needed
+          mkdir -p config
+
+          # Start the simulator with the appropriate profile
+          OLT_SIMULATOR_IMAGE="${{ env.OLT_SIMULATOR_IMAGE }}" \
+            docker compose -f docker-compose.ci.yml --profile ${{ matrix.vendor }} up -d
+
+          # Show running containers
+          docker ps
+
+      - name: Wait for OLT Simulator health
+        run: |
+          echo "Waiting for OLT Simulator to be healthy..."
+          HEALTH_PORT=${{ matrix.vendor == 'vsol' && '8888' || '8889' }}
+
+          for i in {1..30}; do
+            if curl -sf http://localhost:${HEALTH_PORT}/health > /dev/null 2>&1; then
+              echo "OLT Simulator is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i/30..."
+            sleep 2
+          done
+
+          echo "OLT Simulator failed to become healthy"
+          docker logs olt-simulator-${{ matrix.vendor }}-ci 2>&1 | tail -50
+          exit 1
+
+      - name: Make test scripts executable
+        run: |
+          chmod +x test/integration/run-tests.sh
+          chmod +x test/integration/lib/*.sh
+          chmod +x test/integration/commands/*.sh
+          chmod +x test/integration/reports/*.sh 2>/dev/null || true
+
+      - name: Run integration tests
+        id: tests
+        env:
+          NANO_AGENT_BINARY: ${{ github.workspace }}/nano-agent
+          OLT_ADDRESS: localhost
+          VSOL_SSH_PORT: 2222
+          VSOL_SNMP_PORT: 161
+          HUAWEI_SSH_PORT: 2223
+          HUAWEI_SNMP_PORT: 162
+          SSH_USERNAME: admin
+          SSH_PASSWORD: admin
+          SNMP_COMMUNITY: public
+          SKIP_WRITE_TESTS: ${{ github.event.inputs.skip_write || 'false' }}
+        run: |
+          cd test/integration
+          ./run-tests.sh \
+            --vendor ${{ matrix.vendor }} \
+            --output-dir ./results \
+            ${{ github.event.inputs.skip_write == 'true' && '--skip-write' || '' }}
+
+      - name: Generate test report
+        if: always()
+        run: |
+          cd test/integration
+          if [[ -x ./reports/generate-report.sh ]]; then
+            ./reports/generate-report.sh ./results --output ./results
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.vendor }}
+          path: test/integration/results/
+          retention-days: 30
+
+      - name: Show OLT Simulator logs on failure
+        if: failure()
+        run: |
+          echo "=== Docker Containers ==="
+          docker ps -a
+          echo ""
+          echo "=== OLT Simulator Logs ==="
+          docker logs olt-simulator-${{ matrix.vendor }}-ci 2>&1 | tail -100
+
+      - name: Stop OLT Simulator
+        if: always()
+        run: |
+          cd test/integration
+          docker compose -f docker-compose.ci.yml down -v
+
+  # ==========================================================================
+  # Generate combined report and summary
+  # ==========================================================================
+  report-summary:
+    name: Generate Summary
+    needs: integration-test
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download V-SOL results
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results-vsol
+          path: results/vsol
+        continue-on-error: true
+
+      - name: Download Huawei results
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results-huawei
+          path: results/huawei
+        continue-on-error: true
+
+      - name: Create GitHub Summary
+        run: |
+          echo "# Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          for vendor in vsol huawei; do
+            RESULTS_FILE="results/$vendor/results.json"
+            if [[ -f "$RESULTS_FILE" ]]; then
+              echo "## ${vendor^^} Results" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+
+              # Summary stats
+              TOTAL=$(jq '.summary.total // 0' "$RESULTS_FILE")
+              PASSED=$(jq '.summary.passed // 0' "$RESULTS_FILE")
+              FAILED=$(jq '.summary.failed // 0' "$RESULTS_FILE")
+              SKIPPED=$(jq '.summary.skipped // 0' "$RESULTS_FILE")
+              RATE=$(jq '.summary.pass_rate // 0' "$RESULTS_FILE")
+
+              # Status badge
+              if [[ "$FAILED" -eq 0 ]]; then
+                echo "![Pass](https://img.shields.io/badge/status-passing-brightgreen)" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "![Fail](https://img.shields.io/badge/status-failing-red)" >> $GITHUB_STEP_SUMMARY
+              fi
+              echo "" >> $GITHUB_STEP_SUMMARY
+
+              echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+              echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+              echo "| Total Tests | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+              echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+              echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+              echo "| Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+              echo "| Pass Rate | ${RATE}% |" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+
+              # Test details table
+              echo "<details>" >> $GITHUB_STEP_SUMMARY
+              echo "<summary>Test Details</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Command | Status | Duration |" >> $GITHUB_STEP_SUMMARY
+              echo "|---------|--------|----------|" >> $GITHUB_STEP_SUMMARY
+              jq -r '.tests[] | "| \(.command) | \(if .status == "pass" then "✅" else "❌" end) \(.status | ascii_upcase) | \(.duration)s |"' "$RESULTS_FILE" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "## ${vendor^^} Results" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "⚠️ No results found for ${vendor}" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+
+      - name: Upload combined report
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-test-report
+          path: results/
+          retention-days: 30
+        if: always()
+
+      - name: Check for failures
+        run: |
+          FAILED=0
+          for vendor in vsol huawei; do
+            RESULTS_FILE="results/$vendor/results.json"
+            if [[ -f "$RESULTS_FILE" ]]; then
+              VENDOR_FAILED=$(jq '.summary.failed // 0' "$RESULTS_FILE")
+              FAILED=$((FAILED + VENDOR_FAILED))
+            fi
+          done
+
+          if [[ "$FAILED" -gt 0 ]]; then
+            echo "::error::$FAILED test(s) failed"
+            exit 1
+          fi
+          echo "All tests passed!"

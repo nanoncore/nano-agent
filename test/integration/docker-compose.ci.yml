@@ -3,15 +3,19 @@
 #   docker compose -f docker-compose.ci.yml --profile vsol up -d
 #   docker compose -f docker-compose.ci.yml --profile huawei up -d
 #   docker compose -f docker-compose.ci.yml --profile all up -d
+#
+# Environment Variables:
+#   OLT_SIMULATOR_IMAGE - Docker image to use (default: ghcr.io/nanoncore/olt-simulator:latest)
 
 services:
   # V-SOL OLT Simulator
   olt-simulator-vsol:
-    image: ${OLT_SIMULATOR_IMAGE:-olt-simulator:ci}
+    image: ${OLT_SIMULATOR_IMAGE:-ghcr.io/nanoncore/olt-simulator:latest}
     container_name: olt-simulator-vsol-ci
+    command: ["python", "-m", "olt_simulator", "--config", "/app/config/multi-olt.yaml"]
     environment:
-      OLT_MULTI_OLT_CONFIG: /app/config/multi-olt.yaml
       OLT_LOG_LEVEL: INFO
+      PYTHONUNBUFFERED: "1"
     ports:
       - "8888:8080"     # REST API
       - "2222:2222"     # SSH
@@ -24,17 +28,20 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
+    networks:
+      - olt-test-network
     profiles:
       - vsol
       - all
 
   # Huawei OLT Simulator
   olt-simulator-huawei:
-    image: ${OLT_SIMULATOR_IMAGE:-olt-simulator:ci}
+    image: ${OLT_SIMULATOR_IMAGE:-ghcr.io/nanoncore/olt-simulator:latest}
     container_name: olt-simulator-huawei-ci
+    command: ["python", "-m", "olt_simulator", "--config", "/app/config/multi-olt.yaml"]
     environment:
-      OLT_MULTI_OLT_CONFIG: /app/config/multi-olt.yaml
       OLT_LOG_LEVEL: INFO
+      PYTHONUNBUFFERED: "1"
     ports:
       - "8889:8080"     # REST API (different port to avoid conflict)
       - "2223:2223"     # SSH
@@ -47,6 +54,12 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
+    networks:
+      - olt-test-network
     profiles:
       - huawei
       - all
+
+networks:
+  olt-test-network:
+    driver: bridge
