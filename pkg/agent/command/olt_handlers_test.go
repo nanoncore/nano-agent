@@ -710,8 +710,8 @@ func (m *mockDriverV2) GetONUPower(ctx context.Context, ponPort string, onuID in
 func (m *mockDriverV2) GetONUDistance(ctx context.Context, ponPort string, onuID int) (int, error) {
 	return 0, nil
 }
-func (m *mockDriverV2) RestartONU(ctx context.Context, ponPort string, onuID int) error {
-	return nil
+func (m *mockDriverV2) RestartONU(ctx context.Context, ponPort string, onuID int) (*types.RestartONUResult, error) {
+	return &types.RestartONUResult{Success: true, Message: "mock restart"}, nil
 }
 func (m *mockDriverV2) ApplyProfile(ctx context.Context, ponPort string, onuID int, profile *types.ONUProfile) error {
 	return nil
