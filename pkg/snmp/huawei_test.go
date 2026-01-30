@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -104,13 +105,13 @@ func TestHuaweiCollector_CommunityPadding(t *testing.T) {
 
 func TestHuaweiOIDConstants(t *testing.T) {
 	// Verify OID structure is correct
-	if !hasPrefix(huaweiOntOIDs.InfoTable, HuaweiXPON) {
+	if !strings.HasPrefix(huaweiOntOIDs.InfoTable, HuaweiXPON) {
 		t.Error("huaweiOntOIDs.InfoTable should have HuaweiXPON prefix")
 	}
-	if !hasPrefix(huaweiOpticalOIDs.DdmTable, HuaweiXPON) {
+	if !strings.HasPrefix(huaweiOpticalOIDs.DdmTable, HuaweiXPON) {
 		t.Error("huaweiOpticalOIDs.DdmTable should have HuaweiXPON prefix")
 	}
-	if !hasPrefix(huaweiAutoFindOIDs.AutoFindTable, HuaweiXPON) {
+	if !strings.HasPrefix(huaweiAutoFindOIDs.AutoFindTable, HuaweiXPON) {
 		t.Error("huaweiAutoFindOIDs.AutoFindTable should have HuaweiXPON prefix")
 	}
 }

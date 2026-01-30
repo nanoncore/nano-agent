@@ -304,10 +304,9 @@ func parsePrivProtocol(proto string) gosnmp.SnmpV3PrivProtocol {
 }
 
 // NewCollector creates a vendor-specific collector based on configuration.
+// Note: V-SOL SNMP is handled via nano-southbound, not this legacy package.
 func NewCollector(config DeviceConfig) (Collector, error) {
 	switch config.Vendor {
-	case VendorVSOL:
-		return NewVSOLCollector(config), nil
 	case VendorHuawei:
 		return NewHuaweiCollector(config), nil
 	case VendorZTE:

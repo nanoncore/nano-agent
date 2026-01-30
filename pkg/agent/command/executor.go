@@ -182,6 +182,19 @@ pushResult:
 		resultReq.Error = err.Error()
 	}
 
+	// Extract verified from result if present (for suspend/resume commands)
+	if verified, ok := result["verified"].(bool); ok {
+		resultReq.Verified = verified
+	}
+
+	// Extract pre/post state from result if present
+	if preState, ok := result["preState"].(map[string]interface{}); ok {
+		resultReq.PreState = preState
+	}
+	if postState, ok := result["postState"].(map[string]interface{}); ok {
+		resultReq.PostState = postState
+	}
+
 	_, pushErr := e.client.PushCommandResult(cmd.ID, resultReq)
 	if pushErr != nil {
 		log.Printf("[command] Failed to push result for command %s: %v", cmd.ID, pushErr)

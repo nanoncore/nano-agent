@@ -103,6 +103,10 @@ func verifyONUExists(
 
 // verifyONUStateChangeSNMP verifies ONU state change using SNMP (DriverV2).
 // This is more reliable than CLI verification as it directly queries the OLT's SNMP data.
+//
+// Note: V-SOL OLTs have a quirk where the SNMP admin_state OID never changes when
+// onu deactivate is executed. The reliable indicator is RxPower becoming invalid ("N/A").
+// This function checks both admin/oper state AND RxPower for verification.
 func verifyONUStateChangeSNMP(
 	ctx context.Context,
 	driverV2 types.DriverV2,
@@ -113,6 +117,15 @@ func verifyONUStateChangeSNMP(
 	maxRetries int,
 	retryDelay time.Duration,
 ) (string, bool) {
+	// Determine if we're verifying offline states (suspend) or online states (resume)
+	expectingOffline := false
+	for _, state := range expectedStates {
+		if state == "disabled" || state == "suspended" || state == "offline" || state == "deactivated" {
+			expectingOffline = true
+			break
+		}
+	}
+
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(retryDelay)
@@ -143,11 +156,34 @@ func verifyONUStateChangeSNMP(
 						return "suspended", true
 					}
 				}
+
+				// V-SOL OLT specific: Check RxPower as fallback indicator
+				// When ONU is deactivated, RxPower becomes "N/A" (parsed as 0 or very low)
+				// When ONU is active, RxPower is typically between -30 and -10 dBm
+				rxPower := onu.RxPowerDBm
+				if expectingOffline {
+					// For suspend: RxPower should be invalid (0 or very low < -50)
+					if rxPower == 0 || rxPower < -50 {
+						slog.Info("SNMP verification: RxPower indicates offline",
+							"serial", onu.Serial, "rxPower", rxPower)
+						return "offline", true
+					}
+				} else {
+					// For resume: RxPower should be valid (between -50 and 0)
+					if rxPower > -50 && rxPower < 0 {
+						slog.Info("SNMP verification: RxPower indicates online",
+							"serial", onu.Serial, "rxPower", rxPower)
+						return "online", true
+					}
+				}
+
 				slog.Debug("SNMP verification: state mismatch",
 					"serial", onu.Serial,
 					"adminState", adminState,
 					"operState", operState,
-					"expected", expectedStates)
+					"rxPower", rxPower,
+					"expected", expectedStates,
+					"expectingOffline", expectingOffline)
 			}
 		}
 	}
@@ -1019,10 +1055,11 @@ func (e *Executor) handleONUSuspendWithVerification(ctx context.Context, driver 
 
 	if driverV2 != nil {
 		// SNMP verification - more reliable
+		// Use longer wait time (10 retries × 1s = 10s total) to allow state propagation
 		postStatus, verified = verifyONUStateChangeSNMP(
 			ctx, driverV2, ponPort, onuID, serial,
 			[]string{"disabled", "suspended", "offline", "deactivated"},
-			5, 500*time.Millisecond,
+			10, 1*time.Second,
 		)
 		if verified {
 			slog.Info("SNMP verification successful", "ponPort", ponPort, "onuId", onuID, "status", postStatus)
@@ -1132,10 +1169,11 @@ func (e *Executor) handleONUResumeWithVerification(ctx context.Context, driver c
 
 	if driverV2 != nil {
 		// SNMP verification - more reliable
+		// Use longer wait time (10 retries × 1s = 10s total) to allow state propagation
 		postStatus, verified = verifyONUStateChangeSNMP(
 			ctx, driverV2, ponPort, onuID, serial,
-			[]string{"enabled", "online", "active"},
-			5, 500*time.Millisecond,
+			[]string{"enabled", "online", "active", "working"},
+			10, 1*time.Second,
 		)
 		if verified {
 			slog.Info("SNMP verification successful", "ponPort", ponPort, "onuId", onuID, "status", postStatus)

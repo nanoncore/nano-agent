@@ -382,6 +382,15 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		// SNMP driver reads community and version from Metadata
 		config.Metadata["snmp_community"] = state.Config.Protocols.SNMP.Community
 		config.Metadata["snmp_version"] = state.Config.Protocols.SNMP.Version
+
+		// Also pass CLI credentials if available - needed for metrics that
+		// aren't available via SNMP (e.g., V-SOL CPU/Memory)
+		if state.Config.Protocols.SSH.Enabled {
+			config.Username = state.Config.Protocols.SSH.Username
+			config.Password = state.Config.Protocols.SSH.Password
+			config.Metadata["cli_host"] = state.Config.Address
+			config.Metadata["cli_port"] = fmt.Sprintf("%d", state.Config.Protocols.SSH.Port)
+		}
 	} else {
 		config.Port = state.Config.Protocols.SSH.Port
 		config.Username = state.Config.Protocols.SSH.Username
@@ -461,24 +470,27 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 		}
 
 		result.ONUs[i] = ONUData{
-			Serial:        onu.Serial,
-			PONPort:       onu.PONPort,
-			ONUID:         onu.ONUID,
-			Status:        status,
-			Distance:      onu.DistanceM,
-			RxPower:       onu.RxPowerDBm,
-			TxPower:       onu.TxPowerDBm,
-			Model:         onu.Model,
-			Temperature:   onu.Temperature,
-			Voltage:       onu.Voltage,
-			BiasCurrent:   onu.BiasCurrent,
-			BytesUp:       onu.BytesUp,
-			BytesDown:     onu.BytesDown,
-			PacketsUp:     onu.PacketsUp,
-			PacketsDown:   onu.PacketsDown,
-			InputRateBps:  onu.InputRateBps,
-			OutputRateBps: onu.OutputRateBps,
-			Vendor:        onu.Vendor,
+			Serial:         onu.Serial,
+			PONPort:        onu.PONPort,
+			ONUID:          onu.ONUID,
+			Status:         status,
+			Distance:       onu.DistanceM,
+			RxPower:        onu.RxPowerDBm,
+			TxPower:        onu.TxPowerDBm,
+			Model:          onu.Model,
+			Temperature:    onu.Temperature,
+			Voltage:        onu.Voltage,
+			BiasCurrent:    onu.BiasCurrent,
+			BytesUp:        onu.BytesUp,
+			BytesDown:      onu.BytesDown,
+			PacketsUp:      onu.PacketsUp,
+			PacketsDown:    onu.PacketsDown,
+			InputRateBps:   onu.InputRateBps,
+			OutputRateBps:  onu.OutputRateBps,
+			Vendor:         onu.Vendor,
+			LineProfile:    onu.LineProfile,
+			ServiceProfile: onu.ServiceProfile,
+			VLAN:           onu.VLAN,
 		}
 	}
 
