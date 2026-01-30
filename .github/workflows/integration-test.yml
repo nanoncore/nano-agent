@@ -38,7 +38,7 @@ env:
   GO_VERSION: '1.24'
   GOPRIVATE: 'github.com/nanoncore/*'
   # Default to GHCR image, can be overridden
-  OLT_SIMULATOR_IMAGE: ghcr.io/nanoncore/olt-simulator:latest
+  OLT_SIMULATOR_IMAGE: ghcr.io/marksonmarcolino/olt-simulator:latest
 
 jobs:
   # ==========================================================================
@@ -107,7 +107,7 @@ jobs:
       - name: Checkout olt-simulator
         uses: actions/checkout@v4
         with:
-          repository: nanoncore/olt-simulator
+          repository: MarksonMarcolino/olt-simulator
           path: olt-simulator
           # Use GH_PAT for private repos, fallback to GITHUB_TOKEN for same-org repos
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
@@ -198,7 +198,7 @@ jobs:
         if: env.BUILD_FALLBACK == 'true'
         uses: actions/checkout@v4
         with:
-          repository: nanoncore/olt-simulator
+          repository: MarksonMarcolino/olt-simulator
           path: olt-simulator
           # Use GH_PAT for private repos, fallback to GITHUB_TOKEN for same-org repos
           token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
