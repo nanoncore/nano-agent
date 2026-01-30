@@ -464,14 +464,38 @@ func executeReboot(ctx context.Context, driverV2 types.DriverV2, ponPort string,
 	if !outputJSON {
 		fmt.Printf("Rebooting ONU... ")
 	}
-	if err := driverV2.RestartONU(ctx, ponPort, onuID); err != nil {
+	result, err := driverV2.RestartONU(ctx, ponPort, onuID)
+	if err != nil {
 		if !outputJSON {
 			fmt.Printf("FAILED\n")
 		}
 		return fmt.Errorf("reboot failed: %w", err)
 	}
 	if !outputJSON {
-		fmt.Printf("OK\n\n")
+		if result != nil && result.Success {
+			fmt.Printf("OK\n")
+			fmt.Printf("  Deactivate: %s (verified: %v)\n",
+				boolToStatus(result.DeactivateSuccess), result.DeactivateVerified)
+			fmt.Printf("  Activate: %s (verified: %v)\n",
+				boolToStatus(result.ActivateSuccess), result.ActivateVerified)
+			if result.RetryCount > 0 {
+				fmt.Printf("  Retries: %d\n", result.RetryCount)
+			}
+			fmt.Printf("  %s\n\n", result.Message)
+		} else {
+			fmt.Printf("PARTIAL\n")
+			if result != nil {
+				fmt.Printf("  %s\n\n", result.Message)
+			}
+		}
 	}
 	return nil
+}
+
+// boolToStatus converts a boolean to a status string
+func boolToStatus(b bool) string {
+	if b {
+		return "OK"
+	}
+	return "FAILED"
 }
