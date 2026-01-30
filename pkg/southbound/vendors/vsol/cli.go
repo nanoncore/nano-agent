@@ -368,13 +368,9 @@ func (d *VSOLCLIDriver) SaveConfig(ctx context.Context) error {
 
 // RebootONU reboots a specific ONU using deactivate/activate sequence.
 // V-SOL GPON OLTs don't have a direct "onu reboot" command.
+// Note: Connect() already enters config mode, so we go directly to interface.
 func (d *VSOLCLIDriver) RebootONU(ctx context.Context, ponPort string, onuID int) error {
-	// Enter config mode
-	if _, err := d.Execute(ctx, "configure terminal"); err != nil {
-		return fmt.Errorf("failed to enter config mode: %w", err)
-	}
-
-	// Enter GPON interface
+	// Enter GPON interface (already in config mode from Connect())
 	cmd := fmt.Sprintf("interface gpon %s", ponPort)
 	if _, err := d.Execute(ctx, cmd); err != nil {
 		return fmt.Errorf("failed to enter interface: %w", err)
@@ -383,8 +379,7 @@ func (d *VSOLCLIDriver) RebootONU(ctx context.Context, ponPort string, onuID int
 	// Deactivate the ONU
 	cmd = fmt.Sprintf("onu %d deactivate", onuID)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		// Try to exit gracefully
-		d.Execute(ctx, "exit")
+		// Try to exit gracefully (back to config mode)
 		d.Execute(ctx, "exit")
 		return fmt.Errorf("failed to deactivate ONU: %w", err)
 	}
@@ -395,14 +390,12 @@ func (d *VSOLCLIDriver) RebootONU(ctx context.Context, ponPort string, onuID int
 	// Activate the ONU
 	cmd = fmt.Sprintf("onu %d activate", onuID)
 	if _, err := d.Execute(ctx, cmd); err != nil {
-		// Try to exit gracefully
-		d.Execute(ctx, "exit")
+		// Try to exit gracefully (back to config mode)
 		d.Execute(ctx, "exit")
 		return fmt.Errorf("failed to activate ONU: %w", err)
 	}
 
-	// Exit interface and config modes
-	d.Execute(ctx, "exit")
+	// Exit interface mode (back to config mode)
 	d.Execute(ctx, "exit")
 
 	return nil
