@@ -339,11 +339,29 @@ func (e *Executor) handleONUGet(ctx context.Context, driver cli.CLIDriver, cmd a
 // handleONUProvision provisions a new ONU on the OLT.
 func (e *Executor) handleONUProvision(ctx context.Context, driver cli.CLIDriver, cmd agent.PendingCommand) (map[string]interface{}, error) {
 	serial, _ := cmd.Payload["serial"].(string)
+
+	// Support both camelCase and snake_case field names
 	ponPort, _ := cmd.Payload["ponPort"].(string)
+	if ponPort == "" {
+		ponPort, _ = cmd.Payload["pon_port"].(string)
+	}
+
 	onuIDFloat, _ := cmd.Payload["onuId"].(float64)
+	if onuIDFloat == 0 {
+		onuIDFloat, _ = cmd.Payload["onu_id"].(float64)
+	}
 	onuID := int(onuIDFloat)
+
 	lineProfile, _ := cmd.Payload["lineProfile"].(string)
+	if lineProfile == "" {
+		lineProfile, _ = cmd.Payload["line_profile"].(string)
+	}
+
 	serviceProfile, _ := cmd.Payload["serviceProfile"].(string)
+	if serviceProfile == "" {
+		serviceProfile, _ = cmd.Payload["service_profile"].(string)
+	}
+
 	vlanFloat, _ := cmd.Payload["vlan"].(float64)
 	vlan := int(vlanFloat)
 	description, _ := cmd.Payload["description"].(string)

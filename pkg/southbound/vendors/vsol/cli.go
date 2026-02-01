@@ -76,6 +76,7 @@ func (d *VSOLCLIDriver) Connect(ctx context.Context) error {
 
 // AddONU provisions a new ONU on V-Sol OLT.
 // V-SOL CLI syntax: onu add <onu_id> profile <profile> sn <serial>
+// Or use "onu confirm" to auto-provision from auto-find list
 func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest) error {
 	if req.SerialNumber == "" {
 		return fmt.Errorf("serial number is required")
@@ -88,16 +89,47 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
-	// Build ONU add command - V-SOL syntax: onu add <id> profile <profile> sn <serial>
+	// V-SOL requires actual profile names configured on the OLT
+	// TODO: NAN-234 - Implement profile discovery/configuration from OLT metadata
 	profile := req.LineProfile
-	if profile == "" {
-		profile = "AN5506-04-F1" // Use common V-SOL profile if none specified
+	if profile == "" || profile == "default" {
+		return fmt.Errorf("line_profile is required: V-SOL OLT requires an actual profile name (e.g., 'AN5506-04-F1'), not 'default'. Configure the default profile in equipment metadata")
 	}
 
-	cmd = fmt.Sprintf("onu add %d profile %s sn %s", req.OnuID, profile, req.SerialNumber)
-	output, err := d.Execute(ctx, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to add ONU: %w", err)
+	var output string
+	var err error
+
+	// If ONU ID is 0 or not specified, use "onu confirm" to auto-provision from auto-find
+	if req.OnuID <= 0 {
+		// Use onu confirm to provision from auto-find list
+		// This auto-assigns the next available ONU ID
+		cmd = "onu confirm"
+		output, err = d.Execute(ctx, cmd)
+		if err != nil {
+			return fmt.Errorf("failed to confirm ONU: %w", err)
+		}
+
+		// Parse the assigned ONU ID from output like "NOTE: Register pon 2 onu 1 OK."
+		// We need to extract the ONU ID for subsequent commands
+		onuIDMatch := regexp.MustCompile(`onu\s+(\d+)\s+OK`).FindStringSubmatch(output)
+		if len(onuIDMatch) > 1 {
+			if id, parseErr := strconv.Atoi(onuIDMatch[1]); parseErr == nil {
+				req.OnuID = id
+			}
+		}
+
+		// If we couldn't parse the ID, try to find by serial in running config
+		if req.OnuID <= 0 {
+			// Default to 1 if we can't determine
+			req.OnuID = 1
+		}
+	} else {
+		// Use explicit ONU ID with onu add command
+		cmd = fmt.Sprintf("onu add %d profile %s sn %s", req.OnuID, profile, req.SerialNumber)
+		output, err = d.Execute(ctx, cmd)
+		if err != nil {
+			return fmt.Errorf("failed to add ONU: %w", err)
+		}
 	}
 
 	// Check for error indicators - V-SOL uses various error messages
@@ -117,10 +149,36 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		}
 	}
 
-	// Configure native VLAN if specified - V-SOL requires service port configuration
-	// This is handled separately with onu_service_port command if needed
+	// Configure native VLAN if specified
+	// V-SOL requires TCONT -> GEMPORT -> service-port for SNMP visibility
+	// This sequence populates the OIDONUServiceVLAN (.8.7.1.7) table
+	if req.NativeVLAN > 0 {
+		// Create TCONT (traffic container)
+		cmd = fmt.Sprintf("onu %d tcont 1", req.OnuID)
+		if _, err := d.Execute(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to create TCONT: %w", err)
+		}
 
-	// Configure service ports
+		// Create GEMPORT linked to TCONT
+		cmd = fmt.Sprintf("onu %d gemport 1 tcont 1", req.OnuID)
+		if _, err := d.Execute(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to create GEMPORT: %w", err)
+		}
+
+		// Create service-port with VLAN (this populates SNMP VLAN table)
+		cmd = fmt.Sprintf("onu %d service-port 1 gemport 1 uservlan %d vlan %d new_cos 0", req.OnuID, req.NativeVLAN, req.NativeVLAN)
+		if _, err := d.Execute(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to configure service-port VLAN: %w", err)
+		}
+
+		// Also configure port VLAN for traffic tagging
+		cmd = fmt.Sprintf("onu %d portvlan eth 1 mode tag vlan %d", req.OnuID, req.NativeVLAN)
+		if _, err := d.Execute(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to configure port VLAN: %w", err)
+		}
+	}
+
+	// Configure service ports (for more complex VLAN setups)
 	for _, sp := range req.ServicePorts {
 		cmd = fmt.Sprintf("onu %d service-port %d vlan %d", req.OnuID, sp.Index, sp.VLAN)
 		if _, err := d.Execute(ctx, cmd); err != nil {

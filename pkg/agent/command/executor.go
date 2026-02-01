@@ -16,11 +16,15 @@ import (
 	"github.com/nanoncore/nano-southbound/types"
 )
 
+// PollTriggerFunc is a callback to trigger an immediate poll for an OLT.
+type PollTriggerFunc func(ctx context.Context, oltID string) error
+
 // Executor processes commands from the control plane and executes them on OLT devices.
 type Executor struct {
 	client        *agent.Client
 	driverFactory func(config cli.CLIConfig) (cli.CLIDriver, error)
 	oltConfigs    map[string]agent.OLTConfig // equipmentID -> OLTConfig
+	pollTrigger   PollTriggerFunc            // Optional callback to trigger immediate poll
 }
 
 // NewExecutor creates a new command executor.
@@ -30,6 +34,12 @@ func NewExecutor(client *agent.Client, driverFactory func(config cli.CLIConfig) 
 		driverFactory: driverFactory,
 		oltConfigs:    make(map[string]agent.OLTConfig),
 	}
+}
+
+// SetPollTrigger sets the callback function for triggering immediate polls.
+// When a command result includes immediateUpdate: true, this function will be called.
+func (e *Executor) SetPollTrigger(trigger PollTriggerFunc) {
+	e.pollTrigger = trigger
 }
 
 // UpdateOLTConfigs updates the cached OLT configurations.
@@ -205,6 +215,22 @@ pushResult:
 		log.Printf("[command] Command %s failed: %v (duration: %v)", cmd.ID, err, duration)
 	} else {
 		log.Printf("[command] Command %s completed successfully (duration: %v)", cmd.ID, duration)
+	}
+
+	// Trigger immediate poll if requested and successful
+	if err == nil && e.pollTrigger != nil {
+		if immediateUpdate, ok := result["immediateUpdate"].(bool); ok && immediateUpdate {
+			log.Printf("[command] Triggering immediate poll for equipment %s", cmd.EquipmentID)
+			go func(equipmentID string) {
+				pollCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				if pollErr := e.pollTrigger(pollCtx, equipmentID); pollErr != nil {
+					log.Printf("[command] Immediate poll failed for %s: %v", equipmentID, pollErr)
+				} else {
+					log.Printf("[command] Immediate poll completed for %s", equipmentID)
+				}
+			}(cmd.EquipmentID)
+		}
 	}
 
 	return err
