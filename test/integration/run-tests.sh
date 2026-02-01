@@ -140,7 +140,7 @@ init_results "$RESULTS_FILE"
 
 # Command definitions: command_name:type (read/write)
 # Using simple array instead of associative array for bash 3.x compatibility
-READ_COMMANDS="olt-status onu-list port-list discover"
+READ_COMMANDS="olt-status onu-list onu-info port-list discover"
 WRITE_COMMANDS="onu-provision onu-delete onu-reboot port-enable port-disable"
 
 # Function to check if command is a write command
@@ -158,7 +158,7 @@ is_write_command() {
 requires_cli() {
     local vendor="$1"
     local cmd="$2"
-    # V-SOL now supports SNMP for read operations (onu-list, olt-status, port-list)
+    # V-SOL now supports SNMP for read operations (onu-list, olt-status, port-list, onu-info)
     # Only write operations (provision, delete, reboot) and discover require CLI
     if [[ "$vendor" == "vsol" ]]; then
         case "$cmd" in

@@ -36,12 +36,20 @@ func connectToOLT(timeoutSecs int) (*oltConnection, error) {
 		Vendor:        types.Vendor(strings.ToLower(oltVendor)),
 		Address:       oltAddress,
 		Port:          oltPort,
+		Protocol:      types.Protocol(strings.ToLower(oltProtocol)),
 		Username:      oltUsername,
 		Password:      oltPassword,
+		SNMPCommunity: oltCommunity,
+		SNMPVersion:   oltSNMPVersion,
 		TLSEnabled:    oltTLS,
 		TLSSkipVerify: oltTLSSkipVe,
 		Timeout:       time.Duration(timeoutSecs) * time.Second,
 		Metadata:      make(map[string]string),
+	}
+	// Add SNMP metadata for drivers that read it from there
+	if oltProtocol == "snmp" {
+		config.Metadata["snmp_community"] = oltCommunity
+		config.Metadata["snmp_version"] = oltSNMPVersion
 	}
 
 	if !outputJSON {
