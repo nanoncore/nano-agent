@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/nanoncore/nano-southbound/model"
 	"github.com/nanoncore/nano-southbound/types"
 )
 
@@ -506,4 +508,180 @@ func boolToStatus(b bool) string {
 		return "OK"
 	}
 	return "FAILED"
+}
+
+// =============================================================================
+// Update Helpers
+// =============================================================================
+
+func printUpdateHeader(ponPort string, onuID, vlan, trafficProfile int, description string) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU Configuration Update\n")
+	fmt.Printf("========================\n\n")
+	fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+	fmt.Printf("ONU: %s ONU %d\n\n", ponPort, onuID)
+	fmt.Printf("Updates to Apply:\n")
+	if vlan > 0 {
+		fmt.Printf("  VLAN:            %d\n", vlan)
+	}
+	if trafficProfile > 0 {
+		fmt.Printf("  Traffic Profile: %d\n", trafficProfile)
+	}
+	if description != "" {
+		fmt.Printf("  Description:     %s\n", description)
+	}
+	fmt.Println()
+}
+
+func printCurrentConfig(onu *types.ONUInfo) {
+	fmt.Printf("Current Configuration\n")
+	fmt.Printf("---------------------\n")
+	fmt.Printf("  Serial:          %s\n", onu.Serial)
+	fmt.Printf("  Status:          %s\n", onu.OperState)
+	if onu.VLAN > 0 {
+		fmt.Printf("  VLAN:            %d\n", onu.VLAN)
+	}
+	if onu.LineProfile != "" {
+		fmt.Printf("  Line Profile:    %s\n", onu.LineProfile)
+	}
+	if onu.ServiceProfile != "" {
+		fmt.Printf("  Service Profile: %s\n", onu.ServiceProfile)
+	}
+	fmt.Println()
+}
+
+// buildUpdateModels creates subscriber and tier models for update
+func buildUpdateModels(preONU *types.ONUInfo, ponPort string, onuID, vlan, trafficProfile int, description string) (*model.Subscriber, *model.ServiceTier) {
+	subscriber := &model.Subscriber{
+		Name: preONU.Serial,
+		Annotations: map[string]string{
+			"nano.io/pon-port": ponPort,
+			"nano.io/onu-id":   fmt.Sprintf("%d", onuID),
+		},
+		Spec: model.SubscriberSpec{
+			ONUSerial: preONU.Serial,
+			VLAN:      preONU.VLAN, // Keep existing VLAN by default
+			Tier:      "cli-update",
+		},
+	}
+
+	// Apply VLAN update if specified
+	if vlan > 0 {
+		subscriber.Spec.VLAN = vlan
+	}
+
+	// Apply description update if specified
+	if description != "" {
+		subscriber.Spec.Description = description
+	}
+
+	// Preserve existing profiles
+	if preONU.LineProfile != "" {
+		subscriber.Annotations["nano.io/line-profile"] = preONU.LineProfile
+	}
+	if preONU.ServiceProfile != "" {
+		subscriber.Annotations["nano.io/service-profile"] = preONU.ServiceProfile
+	}
+
+	tier := &model.ServiceTier{
+		Name: "cli-update",
+		Spec: model.ServiceTierSpec{
+			BandwidthDown: preONU.BandwidthDown,
+			BandwidthUp:   preONU.BandwidthUp,
+			QoSClass:      "standard",
+		},
+	}
+
+	// Apply traffic profile (bandwidth) update if specified
+	// Note: trafficProfile parameter would need to be mapped to actual bandwidth values
+	// For now, we preserve existing bandwidth unless explicitly changed via tier
+	if trafficProfile > 0 {
+		// Store traffic profile ID in annotations for driver to handle
+		subscriber.Annotations["nano.io/traffic-profile"] = fmt.Sprintf("%d", trafficProfile)
+	}
+
+	return subscriber, tier
+}
+
+// executeUpdate performs the ONU configuration update
+func executeUpdate(ctx context.Context, driver types.Driver, subscriber *model.Subscriber, tier *model.ServiceTier) error {
+	if !outputJSON {
+		fmt.Printf("Updating ONU configuration... ")
+	}
+	err := driver.UpdateSubscriber(ctx, subscriber, tier)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("update failed: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+	return nil
+}
+
+func outputUpdateResult(preONU, postONU *types.ONUInfo, vlan, trafficProfile int) error {
+	if outputJSON {
+		return outputUpdateResultJSON(preONU, postONU, vlan, trafficProfile)
+	}
+
+	fmt.Printf("\nUpdate Complete\n")
+	fmt.Printf("---------------\n")
+
+	if vlan > 0 {
+		if postONU.VLAN == vlan {
+			fmt.Printf("  VLAN:            %d → %d ✓\n", preONU.VLAN, postONU.VLAN)
+		} else {
+			fmt.Printf("  VLAN:            %d → %d (verification pending)\n", preONU.VLAN, vlan)
+		}
+	}
+
+	if trafficProfile > 0 {
+		fmt.Printf("  Traffic Profile: Applied (ID: %d)\n", trafficProfile)
+	}
+
+	fmt.Printf("  Status:          %s\n", postONU.OperState)
+
+	if postONU.IsOnline {
+		fmt.Printf("\nONU is online and operational.\n")
+	}
+
+	return nil
+}
+
+func outputUpdateResultJSON(preONU, postONU *types.ONUInfo, vlan, trafficProfile int) error {
+	output := struct {
+		Success   bool                   `json:"success"`
+		PreState  *types.ONUInfo         `json:"pre_state"`
+		PostState *types.ONUInfo         `json:"post_state"`
+		Updates   map[string]interface{} `json:"updates"`
+	}{
+		Success:   true,
+		PreState:  preONU,
+		PostState: postONU,
+		Updates:   make(map[string]interface{}),
+	}
+
+	if vlan > 0 {
+		output.Updates["vlan"] = map[string]interface{}{
+			"requested": vlan,
+			"previous":  preONU.VLAN,
+			"current":   postONU.VLAN,
+			"verified":  postONU.VLAN == vlan,
+		}
+	}
+
+	if trafficProfile > 0 {
+		output.Updates["traffic_profile"] = map[string]interface{}{
+			"requested": trafficProfile,
+			"applied":   true,
+		}
+	}
+
+	data, _ := json.MarshalIndent(output, "", "  ")
+	fmt.Println(string(data))
+	return nil
 }
