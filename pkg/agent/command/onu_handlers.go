@@ -328,12 +328,99 @@ func (e *Executor) handleONUGet(ctx context.Context, driver cli.CLIDriver, cmd a
 				"mac":            onuInfo.MAC,
 				"description":    onuInfo.Description,
 				"offlineReason":  onuInfo.OfflineReason,
+				// Optical diagnostics (enriched from separate CLI commands)
+				"txPower":     onuInfo.TxPower,
+				"temperature": onuInfo.Temperature,
+				"voltage":     onuInfo.Voltage,
+				"biasCurrent": onuInfo.BiasCurrent,
+				// Traffic counters (enriched from separate CLI commands)
+				"rxBytes": onuInfo.RxBytes,
+				"txBytes": onuInfo.TxBytes,
 			},
 		}, nil
 	}
 
 	// Otherwise search by serial - this is less efficient
 	return nil, fmt.Errorf("search by serial not yet implemented - provide ponPort and onuId")
+}
+
+// handleONUGetV2 retrieves ONU information using DriverV2 (SNMP-based) for efficient optical diagnostics.
+func (e *Executor) handleONUGetV2(ctx context.Context, driver types.DriverV2, cmd agent.PendingCommand) (map[string]interface{}, error) {
+	serial, _ := cmd.Payload["serial"].(string)
+	ponPort, _ := cmd.Payload["ponPort"].(string)
+	onuIDFloat, _ := cmd.Payload["onuId"].(float64)
+	onuID := int(onuIDFloat)
+
+	if serial == "" && (ponPort == "" || onuID == 0) {
+		return nil, fmt.Errorf("either serial or ponPort+onuId is required")
+	}
+
+	// Get ONU list using SNMP-based driver
+	onuList, err := driver.GetONUList(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ONU list: %w", err)
+	}
+
+	// Find the specific ONU by ponPort and onuID (or serial)
+	var targetONU *types.ONUInfo
+	for i := range onuList {
+		onu := &onuList[i]
+		if ponPort != "" && onuID > 0 {
+			// Match by ponPort and onuID
+			if onu.PONPort == ponPort && onu.ONUID == onuID {
+				targetONU = onu
+				break
+			}
+		} else if serial != "" {
+			// Match by serial
+			if onu.Serial == serial {
+				targetONU = onu
+				break
+			}
+		}
+	}
+
+	if targetONU == nil {
+		if ponPort != "" && onuID > 0 {
+			return nil, fmt.Errorf("ONU not found at PON port %s, ID %d", ponPort, onuID)
+		}
+		return nil, fmt.Errorf("ONU not found with serial %s", serial)
+	}
+
+	// Determine status from IsOnline, AdminState, and OperState
+	status := "offline"
+	if targetONU.IsOnline {
+		status = "online"
+	} else if targetONU.AdminState == "disabled" || targetONU.OperState == "suspended" {
+		status = "suspended"
+	} else if targetONU.OperState == "los" {
+		status = "los"
+	} else if targetONU.OperState == "discovered" {
+		status = "discovered"
+	}
+
+	// Return ONU info with SNMP optical diagnostics
+	return map[string]interface{}{
+		"onu": map[string]interface{}{
+			"serial":         targetONU.Serial,
+			"ponPort":        targetONU.PONPort,
+			"onuId":          targetONU.ONUID,
+			"status":         status,
+			"type":           targetONU.Model,
+			"distance":       targetONU.DistanceM,
+			"model":          targetONU.Model,
+			"vendor":         targetONU.Vendor,
+			// Optical diagnostics from SNMP
+			"rxPower":     targetONU.RxPowerDBm,
+			"txPower":     targetONU.TxPowerDBm,
+			"temperature": targetONU.Temperature,
+			"voltage":     targetONU.Voltage,
+			"biasCurrent": targetONU.BiasCurrent,
+			// Traffic counters (may not be available via SNMP on all devices)
+			"rxBytes": targetONU.BytesUp,
+			"txBytes": targetONU.BytesDown,
+		},
+	}, nil
 }
 
 // handleONUProvision provisions a new ONU on the OLT.

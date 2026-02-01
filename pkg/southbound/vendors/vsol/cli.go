@@ -309,7 +309,7 @@ func (d *VSOLCLIDriver) GetONUInfoAll(ctx context.Context, ponPort string) (map[
 	return result, nil
 }
 
-// GetONUInfo retrieves ONU information via CLI.
+// GetONUInfo retrieves ONU information via CLI, enriched with optical diagnostics and traffic counters.
 func (d *VSOLCLIDriver) GetONUInfo(ctx context.Context, ponPort string, onuID int) (*cli.ONUCLIInfo, error) {
 	// Enter GPON interface first
 	cmd := fmt.Sprintf("interface gpon %s", ponPort)
@@ -318,23 +318,47 @@ func (d *VSOLCLIDriver) GetONUInfo(ctx context.Context, ponPort string, onuID in
 	}
 	defer d.Execute(ctx, "exit")
 
-	// V-SOL uses "show onu <id> info" or "show onu info" in interface mode
-	cmd = fmt.Sprintf("show onu %d detail-info", onuID)
+	// V-SOL uses "show onu detail-info <id>" or "show onu info <id>" in interface mode
+	cmd = fmt.Sprintf("show onu detail-info %d", onuID)
 	output, err := d.Execute(ctx, cmd)
 	if err != nil {
 		// Try basic info
-		cmd = fmt.Sprintf("show onu %d info", onuID)
+		cmd = fmt.Sprintf("show onu info %d", onuID)
 		output, err = d.Execute(ctx, cmd)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get ONU info: %w", err)
 		}
 	}
 
-	return parseVSOLONUInfo(output, ponPort, onuID)
+	info, err := parseVSOLONUInfo(output, ponPort, onuID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Enrich with optical diagnostics (best effort - don't fail if unavailable)
+	optical, err := d.GetOpticalDiagnostics(ctx, ponPort, onuID)
+	if err == nil && optical != nil {
+		if info.RxPower == 0 && optical.RxPower != 0 {
+			info.RxPower = optical.RxPower
+		}
+		info.TxPower = optical.TxPower
+		info.Temperature = optical.Temperature
+		info.Voltage = optical.Voltage
+		info.BiasCurrent = optical.BiasCurrent
+	}
+
+	// Enrich with traffic counters (best effort - don't fail if unavailable)
+	counters, err := d.GetONUCounters(ctx, ponPort, onuID)
+	if err == nil && counters != nil {
+		info.RxBytes = counters.RxBytes
+		info.TxBytes = counters.TxBytes
+	}
+
+	return info, nil
 }
 
 // parseVSOLONUInfo parses V-Sol ONU info output.
-// Handles output from "show onu <id> detail-info" which looks like:
+// Handles output from "show onu detail-info <id>" which looks like:
 //
 //	---------onu 1 defail-info---------
 //	Vendor ID:                              FHTT
