@@ -875,6 +875,14 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	cmdExecutor := command.NewExecutor(client, func(cliCfg cli.CLIConfig) (cli.CLIDriver, error) {
 		return cli.CreateDriver(cliCfg, "") // model can be empty, vendor is used for driver selection
 	})
+
+	// Wire up poll trigger so commands with immediateUpdate: true trigger a data refresh
+	if oltPoller != nil {
+		cmdExecutor.SetPollTrigger(func(ctx context.Context, oltID string) error {
+			_, err := oltPoller.TriggerDetailedPoll(ctx, oltID)
+			return err
+		})
+	}
 	fmt.Printf("[%s] Command executor initialized\n", time.Now().Format("15:04:05"))
 
 	// Send initial heartbeat
