@@ -89,20 +89,14 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		return fmt.Errorf("failed to enter interface: %w", err)
 	}
 
-	// V-SOL requires actual profile names configured on the OLT
-	// TODO: NAN-234 - Implement profile discovery/configuration from OLT metadata
-	profile := req.LineProfile
-	if profile == "" || profile == "default" {
-		return fmt.Errorf("line_profile is required: V-SOL OLT requires an actual profile name (e.g., 'AN5506-04-F1'), not 'default'. Configure the default profile in equipment metadata")
-	}
-
 	var output string
 	var err error
 
 	// If ONU ID is 0 or not specified, use "onu confirm" to auto-provision from auto-find
+	// NAN-241: Profiles are optional when using onu confirm (auto-provision)
 	if req.OnuID <= 0 {
 		// Use onu confirm to provision from auto-find list
-		// This auto-assigns the next available ONU ID
+		// This auto-assigns the next available ONU ID and matches serial from auto-find
 		cmd = "onu confirm"
 		output, err = d.Execute(ctx, cmd)
 		if err != nil {
@@ -124,7 +118,11 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 			req.OnuID = 1
 		}
 	} else {
-		// Use explicit ONU ID with onu add command
+		// Use explicit ONU ID with onu add command (requires profile)
+		profile := req.LineProfile
+		if profile == "" || profile == "default" {
+			return fmt.Errorf("line_profile is required when specifying explicit ONU ID: V-SOL OLT requires an actual profile name (e.g., 'AN5506-04-F1'), not 'default'. Configure the default profile in equipment metadata")
+		}
 		cmd = fmt.Sprintf("onu add %d profile %s sn %s", req.OnuID, profile, req.SerialNumber)
 		output, err = d.Execute(ctx, cmd)
 		if err != nil {
