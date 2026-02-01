@@ -328,6 +328,14 @@ func (e *Executor) handleONUGet(ctx context.Context, driver cli.CLIDriver, cmd a
 				"mac":            onuInfo.MAC,
 				"description":    onuInfo.Description,
 				"offlineReason":  onuInfo.OfflineReason,
+				// Optical diagnostics (enriched from separate CLI commands)
+				"txPower":     onuInfo.TxPower,
+				"temperature": onuInfo.Temperature,
+				"voltage":     onuInfo.Voltage,
+				"biasCurrent": onuInfo.BiasCurrent,
+				// Traffic counters (enriched from separate CLI commands)
+				"rxBytes": onuInfo.RxBytes,
+				"txBytes": onuInfo.TxBytes,
 			},
 		}, nil
 	}

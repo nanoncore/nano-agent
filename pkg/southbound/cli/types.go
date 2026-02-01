@@ -52,6 +52,14 @@ type ONUCLIInfo struct {
 	LastOnline     time.Time `json:"last_online,omitempty"`
 	LastOffline    time.Time `json:"last_offline,omitempty"`
 	OfflineReason  string    `json:"offline_reason,omitempty"`
+	// Optical diagnostics (populated when available)
+	TxPower     float64 `json:"tx_power,omitempty"`
+	Temperature float64 `json:"temperature,omitempty"`
+	Voltage     float64 `json:"voltage,omitempty"`
+	BiasCurrent float64 `json:"bias_current,omitempty"`
+	// Traffic counters (populated when available)
+	RxBytes uint64 `json:"rx_bytes,omitempty"`
+	TxBytes uint64 `json:"tx_bytes,omitempty"`
 }
 
 // CommandResult represents the result of a CLI command execution.
