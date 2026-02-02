@@ -717,6 +717,72 @@ func buildUpdateModels(preONU *types.ONUInfo, ponPort string, onuID, vlan, traff
 	return subscriber, tier
 }
 
+// buildProvisionModelsFromUpdate converts update parameters into provision models
+// Used for delete+re-provision flow when profile changes (NAN-259)
+func buildProvisionModelsFromUpdate(
+	preONU *types.ONUInfo,
+	serial string,
+	ponPort string,
+	onuID int,
+	lineProfile string,
+	serviceProfile string,
+	vlan int,
+	trafficProfile int,
+	description string,
+) (*model.Subscriber, *model.ServiceTier) {
+	subscriber := &model.Subscriber{
+		Name: serial,
+		Annotations: map[string]string{
+			"nano.io/pon-port": ponPort,
+			"nano.io/onu-id":   strconv.Itoa(onuID),
+		},
+		Spec: model.SubscriberSpec{
+			ONUSerial: serial,
+			VLAN:      vlan,
+		},
+	}
+
+	// Add profile annotations if provided
+	if lineProfile != "" {
+		subscriber.Annotations["nano.io/line-profile"] = lineProfile
+	}
+	if serviceProfile != "" {
+		subscriber.Annotations["nano.io/service-profile"] = serviceProfile
+	}
+
+	// Add description if provided
+	if description != "" {
+		subscriber.Annotations["nano.io/description"] = description
+	}
+
+	// Preserve bandwidth or use provided traffic profile
+	bandwidthDown := preONU.BandwidthDown
+	bandwidthUp := preONU.BandwidthUp
+
+	if trafficProfile > 0 {
+		// If traffic profile provided, use it (actual values depend on profile mapping)
+		bandwidthDown = trafficProfile // Simplified - actual implementation needs profile lookup
+		bandwidthUp = trafficProfile / 2
+	} else {
+		// Preserve existing bandwidth, or use defaults if not set
+		if bandwidthDown == 0 {
+			bandwidthDown = 100 // Default 100 Mbps
+		}
+		if bandwidthUp == 0 {
+			bandwidthUp = 50 // Default 50 Mbps
+		}
+	}
+
+	tier := &model.ServiceTier{
+		Spec: model.ServiceTierSpec{
+			BandwidthDown: bandwidthDown,
+			BandwidthUp:   bandwidthUp,
+		},
+	}
+
+	return subscriber, tier
+}
+
 // executeUpdate performs the ONU configuration update
 func executeUpdate(ctx context.Context, driver types.Driver, subscriber *model.Subscriber, tier *model.ServiceTier) error {
 	if !outputJSON {
@@ -796,6 +862,22 @@ func outputUpdateResultJSON(preONU, postONU *types.ONUInfo, vlan, trafficProfile
 	data, _ := json.MarshalIndent(output, "", "  ")
 	fmt.Println(string(data))
 	return nil
+}
+
+// extractVLANFromProfileName extracts VLAN ID from a profile name following naming convention
+// Supports formats: line_vlan_100, line-vlan-100, vlan_100, vlan-100
+// Returns VLAN ID and nil error if found, otherwise returns 0 and error (NAN-258)
+func extractVLANFromProfileName(profileName string) (int, error) {
+	// Match patterns like: line_vlan_100, line-vlan-100, vlan_100, vlan-100
+	re := regexp.MustCompile(`(?:line[_-])?vlan[_-](\d+)`)
+	if match := re.FindStringSubmatch(profileName); len(match) == 2 {
+		vlan, err := strconv.Atoi(match[1])
+		if err != nil {
+			return 0, fmt.Errorf("invalid VLAN number in profile name: %w", err)
+		}
+		return vlan, nil
+	}
+	return 0, fmt.Errorf("VLAN not found in profile name %q (expected format: line_vlan_XXX or vlan_XXX)", profileName)
 }
 
 // =============================================================================

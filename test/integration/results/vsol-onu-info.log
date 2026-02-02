@@ -1,0 +1,17 @@
+[0;34m[INFO][0m Testing onu-info for vendor: vsol (protocol: snmp)
+[0;34m[INFO][0m Test 1: JSON output format for ONU 1 on port 0/1
+[0;34m[INFO][0m Test 1 passed: JSON output is valid
+[0;34m[INFO][0m Test 2: Verify required fields
+[0;34m[INFO][0m Serial number found: FHTT01010001
+[0;34m[INFO][0m PON port found: 0/1
+[0;34m[INFO][0m Test 2 passed: Required fields present
+[0;34m[INFO][0m Test 3: Check optical diagnostics fields
+[0;34m[INFO][0m Rx Power found: -18.53 dBm
+[0;34m[INFO][0m Tx Power found: 2.46 dBm
+[0;34m[INFO][0m Temperature found: 47.96 C
+[0;34m[INFO][0m Test 3 passed: Optical diagnostics fields present
+[0;34m[INFO][0m Test 4: Table output format
+[0;34m[INFO][0m Test 4 passed: Table output works
+[0;34m[INFO][0m Test 5: Non-existent ONU error handling
+[0;34m[INFO][0m Test 5 passed: Non-existent ONU handled appropriately
+[0;32m[OK][0m All onu-info tests passed for vsol

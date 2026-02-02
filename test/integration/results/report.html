@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>nano-agent Integration Test Report</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #f5f7fa;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1a1a2e;
+            border-bottom: 3px solid #4361ee;
+            padding-bottom: 15px;
+            margin-top: 0;
+        }
+        .timestamp {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 25px 0;
+        }
+        .stat {
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            transition: transform 0.2s;
+        }
+        .stat:hover { transform: translateY(-2px); }
+        .stat-total { background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); color: #1565c0; }
+        .stat-pass { background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); color: #2e7d32; }
+        .stat-fail { background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%); color: #c62828; }
+        .stat-skip { background: linear-gradient(135deg, #fff8e1 0%, #ffecb3 100%); color: #f57f17; }
+        .stat-number { font-size: 42px; font-weight: 700; }
+        .stat-label { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; margin-top: 5px; }
+        .progress-bar {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
+            transition: width 0.5s ease;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #555;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+        }
+        tr:hover { background: #f8f9fa; }
+        .status-pass { color: #2e7d32; font-weight: 600; }
+        .status-fail { color: #c62828; font-weight: 600; }
+        .status-skipped { color: #f57f17; font-weight: 600; }
+        .duration { color: #666; font-family: monospace; }
+        .error { color: #c62828; font-size: 12px; max-width: 400px; word-wrap: break-word; }
+        .command { font-family: monospace; font-weight: 500; }
+        .vendor-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .vendor-vsol { background: #e3f2fd; color: #1565c0; }
+        .vendor-huawei { background: #fce4ec; color: #c2185b; }
+        footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e0e0e0;
+            color: #888;
+            font-size: 12px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>nano-agent Integration Test Report</h1>
+        <p class="timestamp">Generated: <span id="timestamp"></span></p>
+
+        <div class="summary">
+            <div class="stat stat-total">
+                <div class="stat-number" id="total">-</div>
+                <div class="stat-label">Total Tests</div>
+            </div>
+            <div class="stat stat-pass">
+                <div class="stat-number" id="passed">-</div>
+                <div class="stat-label">Passed</div>
+            </div>
+            <div class="stat stat-fail">
+                <div class="stat-number" id="failed">-</div>
+                <div class="stat-label">Failed</div>
+            </div>
+            <div class="stat stat-skip">
+                <div class="stat-number" id="skipped">-</div>
+                <div class="stat-label">Skipped</div>
+            </div>
+        </div>
+
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress"></div>
+        </div>
+        <p style="text-align: center; color: #666;">
+            Pass Rate: <strong id="pass-rate">-</strong>%
+        </p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Vendor</th>
+                    <th>Command</th>
+                    <th>Status</th>
+                    <th>Duration</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody id="results"></tbody>
+        </table>
+
+        <footer>
+            Generated by nano-agent integration test framework
+        </footer>
+    </div>
+
+    <script>
+        const data = {"timestamp":"2026-01-29T08:50:08+01:00","tests":[{"command":"vsol/olt-status","status":"fail","duration":0,"error":" Global Flags:       --config-dir string   Configuration directory (default "/etc/nano-agent")  Error: driver for vendor vsol does not support OLT status ","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbHQtc3RhdHVzIGZvciB2ZW5kb3I6IHZzb2wKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBKU09OIG91dHB1dCBmb3JtYXQK"},{"command":"vsol/onu-list","status":"fail","duration":0,"error":" Global Flags:       --config-dir string   Configuration directory (default "/etc/nano-agent")  Error: driver for vendor vsol does not support ONU listing ","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtbGlzdCBmb3IgdmVuZG9yOiB2c29sChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogSlNPTiBvdXRwdXQgZm9ybWF0Cg=="},{"command":"vsol/port-list","status":"fail","duration":0,"error":" Global Flags:       --config-dir string   Configuration directory (default "/etc/nano-agent")  Error: driver for vendor vsol does not support this operation ","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWxpc3QgZm9yIHZlbmRvcjogdnNvbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IEpTT04gb3V0cHV0IGZvcm1hdAo="},{"command":"vsol/discover","status":"fail","duration":0,"error":" Global Flags:       --config-dir string   Configuration directory (default "/etc/nano-agent")  Error: driver for vendor vsol does not support ONU discovery ","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBkaXNjb3ZlciBmb3IgdmVuZG9yOiB2c29sIChwcm90b2NvbDogc25tcCkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBKU09OIG91dHB1dCBmb3JtYXQK"},{"command":"vsol/onu-provision","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcHJvdmlzaW9uIGZvciB2ZW5kb3I6IHZzb2wgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHJlcXVpcmVkIHBhcmFtZXRlcnMgc2hvdWxkIGZhaWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogQ29tbWFuZCBjb3JyZWN0bHkgZmFpbHMgd2l0aG91dCByZXF1aXJlZCBwYXJhbXMKG1swOzMybVtPS10bWzBtIEFsbCBvbnUtcHJvdmlzaW9uIHRlc3RzIHBhc3NlZCBmb3IgdnNvbAo="},{"command":"vsol/onu-delete","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtZGVsZXRlIGZvciB2ZW5kb3I6IHZzb2wgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHJlcXVpcmVkIHBhcmFtZXRlcnMgc2hvdWxkIGZhaWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogQ29tbWFuZCBjb3JyZWN0bHkgZmFpbHMgd2l0aG91dCBzZXJpYWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAzOiBEZWxldGUgbm9uLWV4aXN0ZW50IE9OVSBzaG91bGQgZmFpbCBncmFjZWZ1bGx5ChtbMDszNG1bSU5GT10bWzBtIERlbGV0ZSBub24tZXhpc3RlbnQgT05VIHJldHVybmVkIGNvZGU6IDEKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAzIHBhc3NlZDogQ29tbWFuZCBoYW5kbGVzIG5vbi1leGlzdGVudCBPTlUKG1swOzMybVtPS10bWzBtIEFsbCBvbnUtZGVsZXRlIHRlc3RzIHBhc3NlZCBmb3IgdnNvbAo="},{"command":"vsol/onu-reboot","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcmVib290IGZvciB2ZW5kb3I6IHZzb2wgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHNlcmlhbCBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHNlcmlhbAobWzA7MzJtW09LXRtbMG0gQWxsIG9udS1yZWJvb3QgdGVzdHMgcGFzc2VkIGZvciB2c29sCg=="},{"command":"vsol/port-enable","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWVuYWJsZSBmb3IgdmVuZG9yOiB2c29sIChwcm90b2NvbDogY2xpKQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IFZlcmlmeSBoZWxwIG91dHB1dAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBIZWxwIG91dHB1dCBpcyBjb3JyZWN0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMjogTWlzc2luZyBwb3J0IHNob3VsZCBmYWlsChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IENvbW1hbmQgY29ycmVjdGx5IGZhaWxzIHdpdGhvdXQgcG9ydAobWzA7MzJtW09LXRtbMG0gQWxsIHBvcnQtZW5hYmxlIHRlc3RzIHBhc3NlZCBmb3IgdnNvbAo="},{"command":"vsol/port-disable","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWRpc2FibGUgZm9yIHZlbmRvcjogdnNvbCAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3NpbmcgcG9ydCBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHBvcnQKG1swOzMybVtPS10bWzBtIEFsbCBwb3J0LWRpc2FibGUgdGVzdHMgcGFzc2VkIGZvciB2c29sCg=="},{"command":"huawei/olt-status","status":"pass","duration":5,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbHQtc3RhdHVzIGZvciB2ZW5kb3I6IGh1YXdlaQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IEpTT04gb3V0cHV0IGZvcm1hdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBKU09OIG91dHB1dCBpcyB2YWxpZAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IFRhYmxlIG91dHB1dCBmb3JtYXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogVGFibGUgb3V0cHV0IHdvcmtzChtbMDszMm1bT0tdG1swbSBBbGwgb2x0LXN0YXR1cyB0ZXN0cyBwYXNzZWQgZm9yIGh1YXdlaQo="},{"command":"huawei/onu-list","status":"pass","duration":6,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtbGlzdCBmb3IgdmVuZG9yOiBodWF3ZWkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBKU09OIG91dHB1dCBmb3JtYXQKG1swOzM0bVtJTkZPXRtbMG0gRm91bmQgODMgT05VcwobWzA7MzRtW0lORk9dG1swbSBGaWVsZCAnc2VyaWFsJyBwcmVzZW50ChtbMDszNG1bSU5GT10bWzBtIEZpZWxkICdwb25fcG9ydCcgcHJlc2VudAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBKU09OIG91dHB1dCBpcyB2YWxpZAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IFRhYmxlIG91dHB1dCBmb3JtYXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogVGFibGUgb3V0cHV0IHdvcmtzChtbMDszMm1bT0tdG1swbSBBbGwgb251LWxpc3QgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"},{"command":"huawei/port-list","status":"pass","duration":5,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWxpc3QgZm9yIHZlbmRvcjogaHVhd2VpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogSlNPTiBvdXRwdXQgZm9ybWF0ChtbMDszNG1bSU5GT10bWzBtIEZvdW5kIDggUE9OIHBvcnRzChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEpTT04gb3V0cHV0IGlzIHZhbGlkChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMjogVGFibGUgb3V0cHV0IGZvcm1hdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBUYWJsZSBvdXRwdXQgd29ya3MKG1swOzMybVtPS10bWzBtIEFsbCBwb3J0LWxpc3QgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"},{"command":"huawei/discover","status":"pass","duration":1,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBkaXNjb3ZlciBmb3IgdmVuZG9yOiBodWF3ZWkgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogSlNPTiBvdXRwdXQgZm9ybWF0ChtbMDszNG1bSU5GT10bWzBtIEZvdW5kIDY5IHVucHJvdmlzaW9uZWQgT05VcwobWzA7MzRtW0lORk9dG1swbSBGaXJzdCBkaXNjb3ZlcmVkIE9OVSBzZXJpYWw6IDQ4NTc1NDQzQTAwMTAwMDEKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSlNPTiBvdXRwdXQgaXMgdmFsaWQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBUYWJsZSBvdXRwdXQgZm9ybWF0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IFRhYmxlIG91dHB1dCB3b3JrcwobWzA7MzJtW09LXRtbMG0gQWxsIGRpc2NvdmVyIHRlc3RzIHBhc3NlZCBmb3IgaHVhd2VpCg=="},{"command":"huawei/onu-provision","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcHJvdmlzaW9uIGZvciB2ZW5kb3I6IGh1YXdlaSAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3NpbmcgcmVxdWlyZWQgcGFyYW1ldGVycyBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHJlcXVpcmVkIHBhcmFtcwobWzA7MzJtW09LXRtbMG0gQWxsIG9udS1wcm92aXNpb24gdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"},{"command":"huawei/onu-delete","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtZGVsZXRlIGZvciB2ZW5kb3I6IGh1YXdlaSAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3NpbmcgcmVxdWlyZWQgcGFyYW1ldGVycyBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHNlcmlhbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDM6IERlbGV0ZSBub24tZXhpc3RlbnQgT05VIHNob3VsZCBmYWlsIGdyYWNlZnVsbHkKG1swOzM0bVtJTkZPXRtbMG0gRGVsZXRlIG5vbi1leGlzdGVudCBPTlUgcmV0dXJuZWQgY29kZTogMQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDMgcGFzc2VkOiBDb21tYW5kIGhhbmRsZXMgbm9uLWV4aXN0ZW50IE9OVQobWzA7MzJtW09LXRtbMG0gQWxsIG9udS1kZWxldGUgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"},{"command":"huawei/onu-reboot","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcmVib290IGZvciB2ZW5kb3I6IGh1YXdlaSAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3Npbmcgc2VyaWFsIHNob3VsZCBmYWlsChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IENvbW1hbmQgY29ycmVjdGx5IGZhaWxzIHdpdGhvdXQgc2VyaWFsChtbMDszMm1bT0tdG1swbSBBbGwgb251LXJlYm9vdCB0ZXN0cyBwYXNzZWQgZm9yIGh1YXdlaQo="},{"command":"huawei/port-enable","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWVuYWJsZSBmb3IgdmVuZG9yOiBodWF3ZWkgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHBvcnQgc2hvdWxkIGZhaWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogQ29tbWFuZCBjb3JyZWN0bHkgZmFpbHMgd2l0aG91dCBwb3J0ChtbMDszMm1bT0tdG1swbSBBbGwgcG9ydC1lbmFibGUgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"},{"command":"huawei/port-disable","status":"pass","duration":0,"error":"","output_sample":"G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWRpc2FibGUgZm9yIHZlbmRvcjogaHVhd2VpIChwcm90b2NvbDogY2xpKQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IFZlcmlmeSBoZWxwIG91dHB1dAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBIZWxwIG91dHB1dCBpcyBjb3JyZWN0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMjogTWlzc2luZyBwb3J0IHNob3VsZCBmYWlsChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IENvbW1hbmQgY29ycmVjdGx5IGZhaWxzIHdpdGhvdXQgcG9ydAobWzA7MzJtW09LXRtbMG0gQWxsIHBvcnQtZGlzYWJsZSB0ZXN0cyBwYXNzZWQgZm9yIGh1YXdlaQo="}],"summary":{"total":18,"passed":14,"failed":4,"skipped":0,"pass_rate":77}};
+
+        // Update summary
+        document.getElementById('timestamp').textContent = data.timestamp || new Date().toISOString();
+        document.getElementById('total').textContent = data.summary?.total || 0;
+        document.getElementById('passed').textContent = data.summary?.passed || 0;
+        document.getElementById('failed').textContent = data.summary?.failed || 0;
+        document.getElementById('skipped').textContent = data.summary?.skipped || 0;
+
+        const passRate = data.summary?.pass_rate || 0;
+        document.getElementById('pass-rate').textContent = passRate;
+        document.getElementById('progress').style.width = passRate + '%';
+
+        // Populate table
+        const tbody = document.getElementById('results');
+        (data.tests || []).forEach(test => {
+            const parts = test.command.split('/');
+            const vendor = parts[0] || 'unknown';
+            const cmd = parts.slice(1).join('/') || test.command;
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><span class="vendor-badge vendor-${vendor}">${vendor}</span></td>
+                <td class="command">${cmd}</td>
+                <td class="status-${test.status}">${test.status.toUpperCase()}</td>
+                <td class="duration">${(test.duration || 0).toFixed(2)}s</td>
+                <td class="error">${test.error || '-'}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    </script>
+</body>
+</html>

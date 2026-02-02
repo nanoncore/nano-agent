@@ -1,0 +1,138 @@
+{
+  "timestamp": "2026-01-29T08:50:08+01:00",
+  "tests": [
+    {
+      "command": "vsol/olt-status",
+      "status": "fail",
+      "duration": 0,
+      "error": " Global Flags:       --config-dir string   Configuration directory (default \"/etc/nano-agent\")  Error: driver for vendor vsol does not support OLT status ",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbHQtc3RhdHVzIGZvciB2ZW5kb3I6IHZzb2wKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBKU09OIG91dHB1dCBmb3JtYXQK"
+    },
+    {
+      "command": "vsol/onu-list",
+      "status": "fail",
+      "duration": 0,
+      "error": " Global Flags:       --config-dir string   Configuration directory (default \"/etc/nano-agent\")  Error: driver for vendor vsol does not support ONU listing ",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtbGlzdCBmb3IgdmVuZG9yOiB2c29sChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogSlNPTiBvdXRwdXQgZm9ybWF0Cg=="
+    },
+    {
+      "command": "vsol/port-list",
+      "status": "fail",
+      "duration": 0,
+      "error": " Global Flags:       --config-dir string   Configuration directory (default \"/etc/nano-agent\")  Error: driver for vendor vsol does not support this operation ",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWxpc3QgZm9yIHZlbmRvcjogdnNvbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IEpTT04gb3V0cHV0IGZvcm1hdAo="
+    },
+    {
+      "command": "vsol/discover",
+      "status": "fail",
+      "duration": 0,
+      "error": " Global Flags:       --config-dir string   Configuration directory (default \"/etc/nano-agent\")  Error: driver for vendor vsol does not support ONU discovery ",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBkaXNjb3ZlciBmb3IgdmVuZG9yOiB2c29sIChwcm90b2NvbDogc25tcCkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBKU09OIG91dHB1dCBmb3JtYXQK"
+    },
+    {
+      "command": "vsol/onu-provision",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcHJvdmlzaW9uIGZvciB2ZW5kb3I6IHZzb2wgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHJlcXVpcmVkIHBhcmFtZXRlcnMgc2hvdWxkIGZhaWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogQ29tbWFuZCBjb3JyZWN0bHkgZmFpbHMgd2l0aG91dCByZXF1aXJlZCBwYXJhbXMKG1swOzMybVtPS10bWzBtIEFsbCBvbnUtcHJvdmlzaW9uIHRlc3RzIHBhc3NlZCBmb3IgdnNvbAo="
+    },
+    {
+      "command": "vsol/onu-delete",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtZGVsZXRlIGZvciB2ZW5kb3I6IHZzb2wgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHJlcXVpcmVkIHBhcmFtZXRlcnMgc2hvdWxkIGZhaWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogQ29tbWFuZCBjb3JyZWN0bHkgZmFpbHMgd2l0aG91dCBzZXJpYWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAzOiBEZWxldGUgbm9uLWV4aXN0ZW50IE9OVSBzaG91bGQgZmFpbCBncmFjZWZ1bGx5ChtbMDszNG1bSU5GT10bWzBtIERlbGV0ZSBub24tZXhpc3RlbnQgT05VIHJldHVybmVkIGNvZGU6IDEKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAzIHBhc3NlZDogQ29tbWFuZCBoYW5kbGVzIG5vbi1leGlzdGVudCBPTlUKG1swOzMybVtPS10bWzBtIEFsbCBvbnUtZGVsZXRlIHRlc3RzIHBhc3NlZCBmb3IgdnNvbAo="
+    },
+    {
+      "command": "vsol/onu-reboot",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcmVib290IGZvciB2ZW5kb3I6IHZzb2wgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHNlcmlhbCBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHNlcmlhbAobWzA7MzJtW09LXRtbMG0gQWxsIG9udS1yZWJvb3QgdGVzdHMgcGFzc2VkIGZvciB2c29sCg=="
+    },
+    {
+      "command": "vsol/port-enable",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWVuYWJsZSBmb3IgdmVuZG9yOiB2c29sIChwcm90b2NvbDogY2xpKQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IFZlcmlmeSBoZWxwIG91dHB1dAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBIZWxwIG91dHB1dCBpcyBjb3JyZWN0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMjogTWlzc2luZyBwb3J0IHNob3VsZCBmYWlsChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IENvbW1hbmQgY29ycmVjdGx5IGZhaWxzIHdpdGhvdXQgcG9ydAobWzA7MzJtW09LXRtbMG0gQWxsIHBvcnQtZW5hYmxlIHRlc3RzIHBhc3NlZCBmb3IgdnNvbAo="
+    },
+    {
+      "command": "vsol/port-disable",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWRpc2FibGUgZm9yIHZlbmRvcjogdnNvbCAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3NpbmcgcG9ydCBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHBvcnQKG1swOzMybVtPS10bWzBtIEFsbCBwb3J0LWRpc2FibGUgdGVzdHMgcGFzc2VkIGZvciB2c29sCg=="
+    },
+    {
+      "command": "huawei/olt-status",
+      "status": "pass",
+      "duration": 5,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbHQtc3RhdHVzIGZvciB2ZW5kb3I6IGh1YXdlaQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IEpTT04gb3V0cHV0IGZvcm1hdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBKU09OIG91dHB1dCBpcyB2YWxpZAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IFRhYmxlIG91dHB1dCBmb3JtYXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogVGFibGUgb3V0cHV0IHdvcmtzChtbMDszMm1bT0tdG1swbSBBbGwgb2x0LXN0YXR1cyB0ZXN0cyBwYXNzZWQgZm9yIGh1YXdlaQo="
+    },
+    {
+      "command": "huawei/onu-list",
+      "status": "pass",
+      "duration": 6,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtbGlzdCBmb3IgdmVuZG9yOiBodWF3ZWkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBKU09OIG91dHB1dCBmb3JtYXQKG1swOzM0bVtJTkZPXRtbMG0gRm91bmQgODMgT05VcwobWzA7MzRtW0lORk9dG1swbSBGaWVsZCAnc2VyaWFsJyBwcmVzZW50ChtbMDszNG1bSU5GT10bWzBtIEZpZWxkICdwb25fcG9ydCcgcHJlc2VudAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBKU09OIG91dHB1dCBpcyB2YWxpZAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IFRhYmxlIG91dHB1dCBmb3JtYXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogVGFibGUgb3V0cHV0IHdvcmtzChtbMDszMm1bT0tdG1swbSBBbGwgb251LWxpc3QgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"
+    },
+    {
+      "command": "huawei/port-list",
+      "status": "pass",
+      "duration": 5,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWxpc3QgZm9yIHZlbmRvcjogaHVhd2VpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogSlNPTiBvdXRwdXQgZm9ybWF0ChtbMDszNG1bSU5GT10bWzBtIEZvdW5kIDggUE9OIHBvcnRzChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEpTT04gb3V0cHV0IGlzIHZhbGlkChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMjogVGFibGUgb3V0cHV0IGZvcm1hdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBUYWJsZSBvdXRwdXQgd29ya3MKG1swOzMybVtPS10bWzBtIEFsbCBwb3J0LWxpc3QgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"
+    },
+    {
+      "command": "huawei/discover",
+      "status": "pass",
+      "duration": 1,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBkaXNjb3ZlciBmb3IgdmVuZG9yOiBodWF3ZWkgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogSlNPTiBvdXRwdXQgZm9ybWF0ChtbMDszNG1bSU5GT10bWzBtIEZvdW5kIDY5IHVucHJvdmlzaW9uZWQgT05VcwobWzA7MzRtW0lORk9dG1swbSBGaXJzdCBkaXNjb3ZlcmVkIE9OVSBzZXJpYWw6IDQ4NTc1NDQzQTAwMTAwMDEKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSlNPTiBvdXRwdXQgaXMgdmFsaWQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBUYWJsZSBvdXRwdXQgZm9ybWF0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IFRhYmxlIG91dHB1dCB3b3JrcwobWzA7MzJtW09LXRtbMG0gQWxsIGRpc2NvdmVyIHRlc3RzIHBhc3NlZCBmb3IgaHVhd2VpCg=="
+    },
+    {
+      "command": "huawei/onu-provision",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcHJvdmlzaW9uIGZvciB2ZW5kb3I6IGh1YXdlaSAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3NpbmcgcmVxdWlyZWQgcGFyYW1ldGVycyBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHJlcXVpcmVkIHBhcmFtcwobWzA7MzJtW09LXRtbMG0gQWxsIG9udS1wcm92aXNpb24gdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"
+    },
+    {
+      "command": "huawei/onu-delete",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtZGVsZXRlIGZvciB2ZW5kb3I6IGh1YXdlaSAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3NpbmcgcmVxdWlyZWQgcGFyYW1ldGVycyBzaG91bGQgZmFpbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDIgcGFzc2VkOiBDb21tYW5kIGNvcnJlY3RseSBmYWlscyB3aXRob3V0IHNlcmlhbAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDM6IERlbGV0ZSBub24tZXhpc3RlbnQgT05VIHNob3VsZCBmYWlsIGdyYWNlZnVsbHkKG1swOzM0bVtJTkZPXRtbMG0gRGVsZXRlIG5vbi1leGlzdGVudCBPTlUgcmV0dXJuZWQgY29kZTogMQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDMgcGFzc2VkOiBDb21tYW5kIGhhbmRsZXMgbm9uLWV4aXN0ZW50IE9OVQobWzA7MzJtW09LXRtbMG0gQWxsIG9udS1kZWxldGUgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"
+    },
+    {
+      "command": "huawei/onu-reboot",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBvbnUtcmVib290IGZvciB2ZW5kb3I6IGh1YXdlaSAocHJvdG9jb2w6IGNsaSkKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxOiBWZXJpZnkgaGVscCBvdXRwdXQKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAxIHBhc3NlZDogSGVscCBvdXRwdXQgaXMgY29ycmVjdAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDI6IE1pc3Npbmcgc2VyaWFsIHNob3VsZCBmYWlsChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IENvbW1hbmQgY29ycmVjdGx5IGZhaWxzIHdpdGhvdXQgc2VyaWFsChtbMDszMm1bT0tdG1swbSBBbGwgb251LXJlYm9vdCB0ZXN0cyBwYXNzZWQgZm9yIGh1YXdlaQo="
+    },
+    {
+      "command": "huawei/port-enable",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWVuYWJsZSBmb3IgdmVuZG9yOiBodWF3ZWkgKHByb3RvY29sOiBjbGkpChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMTogVmVyaWZ5IGhlbHAgb3V0cHV0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMSBwYXNzZWQ6IEhlbHAgb3V0cHV0IGlzIGNvcnJlY3QKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyOiBNaXNzaW5nIHBvcnQgc2hvdWxkIGZhaWwKG1swOzM0bVtJTkZPXRtbMG0gVGVzdCAyIHBhc3NlZDogQ29tbWFuZCBjb3JyZWN0bHkgZmFpbHMgd2l0aG91dCBwb3J0ChtbMDszMm1bT0tdG1swbSBBbGwgcG9ydC1lbmFibGUgdGVzdHMgcGFzc2VkIGZvciBodWF3ZWkK"
+    },
+    {
+      "command": "huawei/port-disable",
+      "status": "pass",
+      "duration": 0,
+      "error": "",
+      "output_sample": "G1swOzM0bVtJTkZPXRtbMG0gVGVzdGluZyBwb3J0LWRpc2FibGUgZm9yIHZlbmRvcjogaHVhd2VpIChwcm90b2NvbDogY2xpKQobWzA7MzRtW0lORk9dG1swbSBUZXN0IDE6IFZlcmlmeSBoZWxwIG91dHB1dAobWzA7MzRtW0lORk9dG1swbSBUZXN0IDEgcGFzc2VkOiBIZWxwIG91dHB1dCBpcyBjb3JyZWN0ChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMjogTWlzc2luZyBwb3J0IHNob3VsZCBmYWlsChtbMDszNG1bSU5GT10bWzBtIFRlc3QgMiBwYXNzZWQ6IENvbW1hbmQgY29ycmVjdGx5IGZhaWxzIHdpdGhvdXQgcG9ydAobWzA7MzJtW09LXRtbMG0gQWxsIHBvcnQtZGlzYWJsZSB0ZXN0cyBwYXNzZWQgZm9yIGh1YXdlaQo="
+    }
+  ],
+  "summary": {
+    "total": 18,
+    "passed": 14,
+    "failed": 4,
+    "skipped": 0,
+    "pass_rate": 77
+  }
+}

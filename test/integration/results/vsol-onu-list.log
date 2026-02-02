@@ -1,0 +1,9 @@
+[0;34m[INFO][0m Testing onu-list for vendor: vsol (protocol: snmp)
+[0;34m[INFO][0m Test 1: JSON output format
+[0;34m[INFO][0m Found 80 ONUs
+[0;34m[INFO][0m Field 'serial' present
+[0;34m[INFO][0m Field 'pon_port' present
+[0;34m[INFO][0m Test 1 passed: JSON output is valid
+[0;34m[INFO][0m Test 2: Table output format
+[0;34m[INFO][0m Test 2 passed: Table output works
+[0;32m[OK][0m All onu-list tests passed for vsol

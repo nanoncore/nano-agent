@@ -1,0 +1,6 @@
+[0;34m[INFO][0m Testing olt-status for vendor: huawei (protocol: snmp)
+[0;34m[INFO][0m Test 1: JSON output format
+[0;34m[INFO][0m Test 1 passed: JSON output is valid
+[0;34m[INFO][0m Test 2: Table output format
+[0;34m[INFO][0m Test 2 passed: Table output works
+[0;32m[OK][0m All olt-status tests passed for huawei

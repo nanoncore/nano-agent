@@ -1,0 +1,13 @@
+# Include the binary explicitly
+!nano-agent
+
+# Ignore everything else except what we need
+*.md
+*.txt
+*.log
+.git
+.github
+.vscode
+vendor
+testdata
+*_test.go
