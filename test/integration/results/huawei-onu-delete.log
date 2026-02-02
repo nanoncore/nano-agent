@@ -1,0 +1,9 @@
+[0;34m[INFO][0m Testing onu-delete for vendor: huawei (protocol: cli)
+[0;34m[INFO][0m Test 1: Verify help output
+[0;34m[INFO][0m Test 1 passed: Help output is correct
+[0;34m[INFO][0m Test 2: Missing required parameters should fail
+[0;34m[INFO][0m Test 2 passed: Command correctly fails without serial
+[0;34m[INFO][0m Test 3: Delete non-existent ONU should fail gracefully
+[0;34m[INFO][0m Delete non-existent ONU returned code: 1
+[0;34m[INFO][0m Test 3 passed: Command handles non-existent ONU
+[0;32m[OK][0m All onu-delete tests passed for huawei

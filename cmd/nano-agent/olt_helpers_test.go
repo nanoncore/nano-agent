@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/nanoncore/nano-southbound/types"
 )
 
 func TestValidateSerialNumber(t *testing.T) {
@@ -400,6 +402,230 @@ func TestVerifyONUChange(t *testing.T) {
 
 			if (err != nil) != tt.expectErr {
 				t.Errorf("verifyONUChange() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
+	}
+}
+
+// TestExtractVLANFromProfileName tests VLAN extraction from profile names (NAN-258)
+func TestExtractVLANFromProfileName(t *testing.T) {
+	tests := []struct {
+		name        string
+		profileName string
+		wantVLAN    int
+		wantErr     bool
+	}{
+		{
+			name:        "line profile with underscore",
+			profileName: "line_vlan_100",
+			wantVLAN:    100,
+			wantErr:     false,
+		},
+		{
+			name:        "line profile with hyphen",
+			profileName: "line-vlan-200",
+			wantVLAN:    200,
+			wantErr:     false,
+		},
+		{
+			name:        "without line prefix - underscore",
+			profileName: "vlan_300",
+			wantVLAN:    300,
+			wantErr:     false,
+		},
+		{
+			name:        "without line prefix - hyphen",
+			profileName: "vlan-400",
+			wantVLAN:    400,
+			wantErr:     false,
+		},
+		{
+			name:        "multi-digit VLAN",
+			profileName: "line_vlan_4094",
+			wantVLAN:    4094,
+			wantErr:     false,
+		},
+		{
+			name:        "no vlan keyword",
+			profileName: "HSI_1G",
+			wantVLAN:    0,
+			wantErr:     true,
+		},
+		{
+			name:        "empty profile name",
+			profileName: "",
+			wantVLAN:    0,
+			wantErr:     true,
+		},
+		{
+			name:        "profile with vlan but no number",
+			profileName: "line_vlan_",
+			wantVLAN:    0,
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vlan, err := extractVLANFromProfileName(tt.profileName)
+
+			// Check error expectation
+			if (err != nil) != tt.wantErr {
+				t.Errorf("extractVLANFromProfileName(%q) error = %v, wantErr %v",
+					tt.profileName, err, tt.wantErr)
+				return
+			}
+
+			// Check VLAN matches
+			if vlan != tt.wantVLAN {
+				t.Errorf("extractVLANFromProfileName(%q) vlan = %d, want %d",
+					tt.profileName, vlan, tt.wantVLAN)
+			}
+		})
+	}
+}
+
+// TestBuildProvisionModelsFromUpdate tests conversion of update params to provision models (NAN-259)
+func TestBuildProvisionModelsFromUpdate(t *testing.T) {
+	preONU := &types.ONUInfo{
+		ONUID:         5,
+		PONPort:       "0/1",
+		Serial:        "HWTC12345678",
+		VLAN:          100,
+		LineProfile:   "line_vlan_100",
+		BandwidthDown: 100,
+		BandwidthUp:   50,
+	}
+
+	tests := []struct {
+		name           string
+		serial         string
+		ponPort        string
+		onuID          int
+		lineProfile    string
+		serviceProfile string
+		vlan           int
+		trafficProfile int
+		description    string
+		wantVLAN       int
+		wantBWDown     int
+		wantBWUp       int
+	}{
+		{
+			name:           "new line profile with VLAN",
+			serial:         "HWTC12345678",
+			ponPort:        "0/1",
+			onuID:          5,
+			lineProfile:    "line_vlan_200",
+			serviceProfile: "",
+			vlan:           200,
+			trafficProfile: 0,
+			description:    "Test ONU",
+			wantVLAN:       200,
+			wantBWDown:     100, // Preserved from preONU
+			wantBWUp:       50,
+		},
+		{
+			name:           "VLAN only, preserve bandwidth",
+			serial:         "HWTC12345678",
+			ponPort:        "0/1",
+			onuID:          5,
+			lineProfile:    "",
+			serviceProfile: "",
+			vlan:           300,
+			trafficProfile: 0,
+			description:    "",
+			wantVLAN:       300,
+			wantBWDown:     100, // Preserved from preONU
+			wantBWUp:       50,
+		},
+		{
+			name:           "with traffic profile",
+			serial:         "HWTC12345678",
+			ponPort:        "0/1",
+			onuID:          5,
+			lineProfile:    "",
+			serviceProfile: "",
+			vlan:           200,
+			trafficProfile: 200,
+			description:    "",
+			wantVLAN:       200,
+			wantBWDown:     200, // From traffic profile
+			wantBWUp:       100, // traffic profile / 2
+		},
+		{
+			name:           "default bandwidth when zero",
+			serial:         "HWTC12345678",
+			ponPort:        "0/1",
+			onuID:          5,
+			lineProfile:    "",
+			serviceProfile: "",
+			vlan:           200,
+			trafficProfile: 0,
+			description:    "",
+			wantVLAN:       200,
+			wantBWDown:     100, // Preserved from preONU (not zero)
+			wantBWUp:       50,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			subscriber, tier := buildProvisionModelsFromUpdate(
+				preONU,
+				tt.serial,
+				tt.ponPort,
+				tt.onuID,
+				tt.lineProfile,
+				tt.serviceProfile,
+				tt.vlan,
+				tt.trafficProfile,
+				tt.description,
+			)
+
+			// Check subscriber fields
+			if subscriber.Name != tt.serial {
+				t.Errorf("subscriber.Name = %q, want %q", subscriber.Name, tt.serial)
+			}
+
+			if subscriber.Spec.ONUSerial != tt.serial {
+				t.Errorf("subscriber.Spec.ONUSerial = %q, want %q", subscriber.Spec.ONUSerial, tt.serial)
+			}
+
+			if subscriber.Spec.VLAN != tt.wantVLAN {
+				t.Errorf("subscriber.Spec.VLAN = %d, want %d", subscriber.Spec.VLAN, tt.wantVLAN)
+			}
+
+			// Check annotations
+			if ponPort := subscriber.Annotations["nano.io/pon-port"]; ponPort != tt.ponPort {
+				t.Errorf("pon-port annotation = %q, want %q", ponPort, tt.ponPort)
+			}
+
+			if tt.lineProfile != "" {
+				if lp := subscriber.Annotations["nano.io/line-profile"]; lp != tt.lineProfile {
+					t.Errorf("line-profile annotation = %q, want %q", lp, tt.lineProfile)
+				}
+			}
+
+			if tt.serviceProfile != "" {
+				if sp := subscriber.Annotations["nano.io/service-profile"]; sp != tt.serviceProfile {
+					t.Errorf("service-profile annotation = %q, want %q", sp, tt.serviceProfile)
+				}
+			}
+
+			if tt.description != "" {
+				if desc := subscriber.Annotations["nano.io/description"]; desc != tt.description {
+					t.Errorf("description annotation = %q, want %q", desc, tt.description)
+				}
+			}
+
+			// Check tier fields
+			if tier.Spec.BandwidthDown != tt.wantBWDown {
+				t.Errorf("tier.Spec.BandwidthDown = %d, want %d", tier.Spec.BandwidthDown, tt.wantBWDown)
+			}
+
+			if tier.Spec.BandwidthUp != tt.wantBWUp {
+				t.Errorf("tier.Spec.BandwidthUp = %d, want %d", tier.Spec.BandwidthUp, tt.wantBWUp)
 			}
 		})
 	}

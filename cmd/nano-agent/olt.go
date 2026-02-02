@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -1190,6 +1191,13 @@ func runONUProvision(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Detect line profile usage for two-step provisioning (NAN-258)
+	usesLineProfile := onuProvLineProfile != "" && strings.Contains(onuProvLineProfile, "line")
+
+	if usesLineProfile && !outputJSON {
+		fmt.Printf("Using line profile provisioning (two-step)\n\n")
+	}
+
 	printProvisionHeader(onuProvDryRun, onuProvSerial, onuProvVLAN, onuProvBandwidthDn, onuProvBandwidthUp,
 		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile)
 
@@ -1205,7 +1213,7 @@ func runONUProvision(cmd *cobra.Command, args []string) error {
 	}
 	defer conn.close()
 
-	result, err := executeProvision(conn.ctx, conn.driver, subscriber, tier)
+	result, err := executeProvision(conn.ctx, conn.driver, subscriber, tier, usesLineProfile)
 	if err != nil {
 		return err
 	}
@@ -1264,8 +1272,8 @@ func outputProvisionDryRun(subscriber *model.Subscriber, tier *model.ServiceTier
 	return nil
 }
 
-// executeProvision performs the ONU provisioning
-func executeProvision(ctx context.Context, driver types.Driver, subscriber *model.Subscriber, tier *model.ServiceTier) (*types.SubscriberResult, error) {
+// executeProvision performs the ONU provisioning with verification (NAN-258)
+func executeProvision(ctx context.Context, driver types.Driver, subscriber *model.Subscriber, tier *model.ServiceTier, usesLineProfile bool) (*types.SubscriberResult, error) {
 	if !outputJSON {
 		fmt.Printf("Provisioning ONU... ")
 	}
@@ -1279,6 +1287,48 @@ func executeProvision(ctx context.Context, driver types.Driver, subscriber *mode
 	if !outputJSON {
 		fmt.Printf("OK\n\n")
 	}
+
+	// Get DriverV2 interface for verification (NAN-258)
+	driverV2, ok := driver.(types.DriverV2)
+	if !ok {
+		// Driver doesn't support verification, skip
+		return result, nil
+	}
+
+	// Extract PON port and ONU ID from subscriber annotations
+	ponPort := subscriber.Annotations["nano.io/pon-port"]
+	onuIDStr := subscriber.Annotations["nano.io/onu-id"]
+	if ponPort == "" || onuIDStr == "" {
+		// Can't verify without location info, skip
+		return result, nil
+	}
+	onuID, err := strconv.Atoi(onuIDStr)
+	if err != nil {
+		return result, nil // Skip verification if ONU ID invalid
+	}
+
+	// Verify ONU provisioning (NAN-258)
+	if err := verifyONUProvision(ctx, driverV2, ponPort, onuID); err != nil {
+		return nil, fmt.Errorf("provisioning verification failed: %w", err)
+	}
+
+	// If using line profile, verify line profile association (NAN-258)
+	if usesLineProfile {
+		lineProfile := subscriber.Annotations["nano.io/line-profile"]
+		if lineProfile != "" {
+			if err := verifyLineProfileAssociation(ctx, driverV2, ponPort, onuID, lineProfile); err != nil {
+				return nil, fmt.Errorf("line profile verification failed: %w", err)
+			}
+		}
+	}
+
+	// Verify VLAN if specified (NAN-258)
+	if subscriber.Spec.VLAN > 0 {
+		if err := verifyVLANUpdate(ctx, driverV2, ponPort, onuID, subscriber.Spec.VLAN); err != nil {
+			return nil, fmt.Errorf("VLAN verification failed: %w", err)
+		}
+	}
+
 	return result, nil
 }
 
@@ -1448,12 +1498,172 @@ func runONUUpdate(cmd *cobra.Command, args []string) error {
 		printCurrentConfig(preONU)
 	}
 
+	// Detect if profile change is required (NAN-259)
+	// Optimization: Only re-provision if profile actually changes, not just because line profile is bound
+	profileChanged := onuUpdateLineProfile != "" && onuUpdateLineProfile != preONU.LineProfile
+
+	// Check if we should try direct VLAN update first (profile unchanged scenario)
+	// CRITICAL: Line profiles MAY BLOCK direct VLAN changes (validated Test 7)
+	// But if profile is unchanged, try direct update first before re-provisioning
+	needsReProvision := profileChanged
+
+	if needsReProvision {
+		// Flow 2: Delete + Re-provision (profile change)
+		if !outputJSON {
+			fmt.Printf("\n⚠ Profile change requires ONU re-provisioning (brief service interruption)\n")
+			fmt.Printf("Starting delete+re-provision flow...\n\n")
+		}
+
+		// CRITICAL: Store serial number before deletion
+		serial := preONU.Serial
+		if serial == "" {
+			return fmt.Errorf("cannot re-provision: ONU serial number not found")
+		}
+
+		// Step 1: Delete ONU
+		if !outputJSON {
+			fmt.Printf("Deleting ONU %d... ", onuUpdateONUID)
+		}
+
+		// Build subscriber ID for deletion
+		subscriberID := fmt.Sprintf("%s-%d", onuUpdatePONPort, onuUpdateONUID)
+		err := conn.driver.DeleteSubscriber(conn.ctx, subscriberID)
+		if err != nil {
+			if !outputJSON {
+				fmt.Printf("FAILED\n")
+			}
+			return fmt.Errorf("failed to delete ONU: %w", err)
+		}
+
+		if !outputJSON {
+			fmt.Printf("OK\n")
+		}
+
+		// Verify deletion (retry up to 3 times)
+		if !outputJSON {
+			fmt.Printf("Verifying deletion... ")
+		}
+		err = verifyONUDeletion(conn.ctx, driverV2, onuUpdatePONPort, onuUpdateONUID)
+		if err != nil {
+			if !outputJSON {
+				fmt.Printf("FAILED\n")
+			}
+			return fmt.Errorf("failed to verify ONU deletion: %w", err)
+		}
+		if !outputJSON {
+			fmt.Printf("OK\n\n")
+		}
+
+		// Wait for OLT to process deletion
+		time.Sleep(2 * time.Second)
+
+		// Step 2: Build provision models with new configuration
+		vlan := onuUpdateVLAN
+		if vlan == 0 {
+			vlan = preONU.VLAN // Preserve existing VLAN if not changing
+		}
+
+		subscriber, tier := buildProvisionModelsFromUpdate(
+			preONU, serial, onuUpdatePONPort, onuUpdateONUID,
+			onuUpdateLineProfile, onuUpdateServiceProfile,
+			vlan, onuUpdateTrafficProfile, onuUpdateDescription)
+
+		// Step 3: Re-provision
+		if !outputJSON {
+			if onuUpdateLineProfile != "" {
+				fmt.Printf("Re-provisioning with line profile '%s'...\n", onuUpdateLineProfile)
+			} else {
+				fmt.Printf("Re-provisioning with VLAN %d...\n", vlan)
+			}
+		}
+
+		// Detect if using line profile for two-step provisioning
+		usesLineProfile := onuUpdateLineProfile != "" && strings.Contains(onuUpdateLineProfile, "line")
+
+		_, err = executeProvision(conn.ctx, conn.driver, subscriber, tier, usesLineProfile)
+		if err != nil {
+			return fmt.Errorf("failed to re-provision ONU: %w", err)
+		}
+
+		// Get post-state for output
+		postONU, err := lookupONUByPortID(conn.ctx, driverV2, onuUpdatePONPort, onuUpdateONUID)
+		if err != nil {
+			if !outputJSON {
+				fmt.Printf("Warning: Could not verify final state: %v\n", err)
+			}
+			postONU = preONU
+			postONU.VLAN = vlan
+			if onuUpdateLineProfile != "" {
+				postONU.LineProfile = onuUpdateLineProfile
+			}
+		}
+
+		if !outputJSON {
+			fmt.Printf("\n⚠ Service was interrupted during re-provisioning\n")
+		}
+
+		// Output re-provision result
+		if !outputJSON {
+			fmt.Printf("\nRe-Provision Complete\n")
+			fmt.Printf("---------------------\n")
+			fmt.Printf("  ONU ID:          %d\n", postONU.ONUID)
+			fmt.Printf("  PON Port:        %s\n", postONU.PONPort)
+			fmt.Printf("  Serial:          %s\n", postONU.Serial)
+			if onuUpdateVLAN > 0 {
+				fmt.Printf("  VLAN:            %d → %d\n", preONU.VLAN, postONU.VLAN)
+			}
+			if onuUpdateLineProfile != "" {
+				fmt.Printf("  Line Profile:    %s → %s\n", preONU.LineProfile, postONU.LineProfile)
+			}
+			return nil
+		}
+
+		return outputUpdateResult(preONU, postONU, onuUpdateVLAN, onuUpdateTrafficProfile)
+	}
+
+	// Flow 1: Direct VLAN update (only works if NO line profile bound)
+	if !outputJSON {
+		fmt.Printf("\n")
+	}
+
 	// Build update models
 	subscriber, tier := buildUpdateModels(preONU, onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN, onuUpdateTrafficProfile, onuUpdateDescription, onuUpdateLineProfile, onuUpdateServiceProfile)
 
 	// Execute update
 	if err := executeUpdate(conn.ctx, conn.driver, subscriber, tier); err != nil {
+		// Check if ONU has line profile (may be blocking update)
+		if preONU.LineProfile != "" {
+			return fmt.Errorf(
+				"VLAN update failed. ONU is managed by line profile '%s'. "+
+					"Line profiles block direct VLAN changes. "+
+					"Use --line-profile to change profile or provide --vlan to trigger delete+re-provision.",
+				preONU.LineProfile)
+		}
 		return err
+	}
+
+	// Verify VLAN update with retries if VLAN changed
+	if onuUpdateVLAN > 0 {
+		if !outputJSON {
+			fmt.Printf("Verifying VLAN update... ")
+		}
+		err = verifyVLANUpdate(conn.ctx, driverV2, onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN)
+		if err != nil {
+			if !outputJSON {
+				fmt.Printf("FAILED\n")
+			}
+			// If ONU has line profile, VLAN update may have been blocked
+			if preONU.LineProfile != "" {
+				return fmt.Errorf(
+					"VLAN update verification failed. ONU is managed by line profile '%s' which may be blocking direct VLAN changes. "+
+						"Use --line-profile %s to trigger delete+re-provision with the same profile.",
+					preONU.LineProfile, preONU.LineProfile)
+			}
+			return fmt.Errorf("VLAN update failed verification: %w", err)
+		}
+		if !outputJSON {
+			fmt.Printf("OK\n\n")
+		}
 	}
 
 	// Verify changes (wait for OLT to process)

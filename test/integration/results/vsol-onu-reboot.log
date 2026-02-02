@@ -1,0 +1,6 @@
+[0;34m[INFO][0m Testing onu-reboot for vendor: vsol (protocol: cli)
+[0;34m[INFO][0m Test 1: Verify help output
+[0;34m[INFO][0m Test 1 passed: Help output is correct
+[0;34m[INFO][0m Test 2: Missing serial should fail
+[0;34m[INFO][0m Test 2 passed: Command correctly fails without serial
+[0;32m[OK][0m All onu-reboot tests passed for vsol
