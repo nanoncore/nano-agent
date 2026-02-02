@@ -123,6 +123,29 @@ func lookupONUBySerial(ctx context.Context, driverV2 types.DriverV2, serial stri
 	if !outputJSON {
 		fmt.Printf("OK (port %s, id %d)\n", onu.PONPort, onu.ONUID)
 	}
+
+	// Enrich with detailed info including VLAN (NAN-242)
+	if detailProvider, ok := driverV2.(interface {
+		GetONUDetails(ctx context.Context, ponPort string, onuID int) (*types.ONUInfo, error)
+	}); ok {
+		detailedONU, err := detailProvider.GetONUDetails(ctx, onu.PONPort, onu.ONUID)
+		if err == nil && detailedONU != nil {
+			// Merge detailed info into basic ONU info
+			onu.RxPowerDBm = detailedONU.RxPowerDBm
+			onu.TxPowerDBm = detailedONU.TxPowerDBm
+			onu.Temperature = detailedONU.Temperature
+			onu.Voltage = detailedONU.Voltage
+			onu.BiasCurrent = detailedONU.BiasCurrent
+			onu.BytesUp = detailedONU.BytesUp
+			onu.BytesDown = detailedONU.BytesDown
+			onu.PacketsUp = detailedONU.PacketsUp
+			onu.PacketsDown = detailedONU.PacketsDown
+			onu.InputRateBps = detailedONU.InputRateBps
+			onu.OutputRateBps = detailedONU.OutputRateBps
+			onu.VLAN = detailedONU.VLAN
+		}
+	}
+
 	return onu, nil
 }
 
@@ -145,6 +168,29 @@ func lookupONUByPortID(ctx context.Context, driverV2 types.DriverV2, ponPort str
 			if !outputJSON {
 				fmt.Printf("OK\n")
 			}
+
+			// Enrich with detailed info including VLAN (NAN-242)
+			if detailProvider, ok := driverV2.(interface {
+				GetONUDetails(ctx context.Context, ponPort string, onuID int) (*types.ONUInfo, error)
+			}); ok {
+				detailedONU, err := detailProvider.GetONUDetails(ctx, ponPort, onuID)
+				if err == nil && detailedONU != nil {
+					// Merge detailed info into basic ONU info
+					onus[i].RxPowerDBm = detailedONU.RxPowerDBm
+					onus[i].TxPowerDBm = detailedONU.TxPowerDBm
+					onus[i].Temperature = detailedONU.Temperature
+					onus[i].Voltage = detailedONU.Voltage
+					onus[i].BiasCurrent = detailedONU.BiasCurrent
+					onus[i].BytesUp = detailedONU.BytesUp
+					onus[i].BytesDown = detailedONU.BytesDown
+					onus[i].PacketsUp = detailedONU.PacketsUp
+					onus[i].PacketsDown = detailedONU.PacketsDown
+					onus[i].InputRateBps = detailedONU.InputRateBps
+					onus[i].OutputRateBps = detailedONU.OutputRateBps
+					onus[i].VLAN = detailedONU.VLAN
+				}
+			}
+
 			return &onus[i], nil
 		}
 	}
