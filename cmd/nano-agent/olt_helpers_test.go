@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestValidateSerialNumber(t *testing.T) {
@@ -176,5 +179,228 @@ func TestSerialNumberRegex(t *testing.T) {
 		if serialNumberRegex.MatchString(serial) {
 			t.Errorf("serialNumberRegex should not match invalid serial %q", serial)
 		}
+	}
+}
+
+func TestValidateProfileVLANConsistency(t *testing.T) {
+	tests := []struct {
+		name        string
+		lineProfile string
+		vlan        int
+		force       bool
+		wantDecision string
+		wantErr     bool
+	}{
+		{
+			name:        "no validation - empty profile",
+			lineProfile: "",
+			vlan:        100,
+			force:       false,
+			wantDecision: "",
+			wantErr:     false,
+		},
+		{
+			name:        "no validation - zero VLAN",
+			lineProfile: "line_vlan_100",
+			vlan:        0,
+			force:       false,
+			wantDecision: "",
+			wantErr:     false,
+		},
+		{
+			name:        "no validation - both empty",
+			lineProfile: "",
+			vlan:        0,
+			force:       false,
+			wantDecision: "",
+			wantErr:     false,
+		},
+		{
+			name:        "match - profile and VLAN match (underscore)",
+			lineProfile: "line_vlan_100",
+			vlan:        100,
+			force:       false,
+			wantDecision: "profile",
+			wantErr:     false,
+		},
+		{
+			name:        "match - profile and VLAN match (hyphen)",
+			lineProfile: "line-vlan-200",
+			vlan:        200,
+			force:       false,
+			wantDecision: "profile",
+			wantErr:     false,
+		},
+		{
+			name:        "match - without line prefix (underscore)",
+			lineProfile: "vlan_300",
+			vlan:        300,
+			force:       false,
+			wantDecision: "profile",
+			wantErr:     false,
+		},
+		{
+			name:        "match - without line prefix (hyphen)",
+			lineProfile: "vlan-400",
+			vlan:        400,
+			force:       false,
+			wantDecision: "profile",
+			wantErr:     false,
+		},
+		{
+			name:        "mismatch - no force flag",
+			lineProfile: "line_vlan_100",
+			vlan:        200,
+			force:       false,
+			wantDecision: "",
+			wantErr:     true,
+		},
+		{
+			name:        "mismatch - with force flag",
+			lineProfile: "line_vlan_100",
+			vlan:        200,
+			force:       true,
+			wantDecision: "direct-vlan",
+			wantErr:     false,
+		},
+		{
+			name:        "convention not followed - arbitrary name",
+			lineProfile: "HSI_1G",
+			vlan:        100,
+			force:       false,
+			wantDecision: "profile",
+			wantErr:     false,
+		},
+		{
+			name:        "convention not followed - no vlan keyword",
+			lineProfile: "line_100",
+			vlan:        100,
+			force:       false,
+			wantDecision: "profile",
+			wantErr:     false,
+		},
+		{
+			name:        "match - multi-digit VLAN",
+			lineProfile: "line_vlan_4094",
+			vlan:        4094,
+			force:       false,
+			wantDecision: "profile",
+			wantErr:     false,
+		},
+		{
+			name:        "mismatch - multi-digit VLAN with force",
+			lineProfile: "line_vlan_4094",
+			vlan:        100,
+			force:       true,
+			wantDecision: "direct-vlan",
+			wantErr:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := validateProfileVLANConsistency(tt.lineProfile, tt.vlan, tt.force)
+
+			// Check error expectation
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateProfileVLANConsistency(%q, %d, %v) error = %v, wantErr %v",
+					tt.lineProfile, tt.vlan, tt.force, err, tt.wantErr)
+				return
+			}
+
+			// Check decision matches
+			if decision != tt.wantDecision {
+				t.Errorf("validateProfileVLANConsistency(%q, %d, %v) decision = %q, want %q",
+					tt.lineProfile, tt.vlan, tt.force, decision, tt.wantDecision)
+			}
+
+			// For mismatch errors, verify error message contains helpful guidance
+			if tt.wantErr && err != nil {
+				errMsg := err.Error()
+				if tt.lineProfile != "" && tt.vlan > 0 {
+					// Should contain the profile name and VLAN in error message
+					// This is a basic check - could be more specific
+					if len(errMsg) < 50 {
+						t.Errorf("Error message too short, expected detailed guidance: %q", errMsg)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestVerifyONUChange tests the generic retry verification logic (NAN-257)
+func TestVerifyONUChange(t *testing.T) {
+	tests := []struct {
+		name         string
+		verifyFunc   func() (bool, error)
+		maxRetries   int
+		retryDelay   time.Duration
+		expectErr    bool
+		expectAttempts int
+	}{
+		{
+			name: "success on first attempt",
+			verifyFunc: func() (bool, error) {
+				return true, nil
+			},
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      false,
+			expectAttempts: 1,
+		},
+		{
+			name: "success on second attempt",
+			verifyFunc: (func() func() (bool, error) {
+				attempt := 0
+				return func() (bool, error) {
+					attempt++
+					if attempt == 2 {
+						return true, nil
+					}
+					return false, nil
+				}
+			})(),
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      false,
+			expectAttempts: 2,
+		},
+		{
+			name: "fail all retries",
+			verifyFunc: func() (bool, error) {
+				return false, nil
+			},
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      true,
+			expectAttempts: 3,
+		},
+		{
+			name: "verification error",
+			verifyFunc: func() (bool, error) {
+				return false, fmt.Errorf("verification error")
+			},
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      true,
+			expectAttempts: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save original outputJSON state and restore after test
+			origOutputJSON := outputJSON
+			outputJSON = true
+			defer func() { outputJSON = origOutputJSON }()
+
+			ctx := context.Background()
+			err := verifyONUChange(ctx, tt.verifyFunc, tt.maxRetries, tt.retryDelay)
+
+			if (err != nil) != tt.expectErr {
+				t.Errorf("verifyONUChange() error = %v, expectErr %v", err, tt.expectErr)
+			}
+		})
 	}
 }

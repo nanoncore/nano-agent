@@ -140,6 +140,7 @@ var (
 	onuProvSrvProfile  string
 	onuProvDescription string
 	onuProvDryRun      bool
+	onuProvForce       bool
 )
 
 // ONU delete flags
@@ -155,6 +156,18 @@ var (
 	onuRebootSerial  string
 	onuRebootPONPort string
 	onuRebootONUID   int
+)
+
+// ONU update flags
+var (
+	onuUpdatePONPort        string
+	onuUpdateONUID          int
+	onuUpdateVLAN           int
+	onuUpdateTrafficProfile int
+	onuUpdateDescription    string
+	onuUpdateLineProfile    string
+	onuUpdateServiceProfile string
+	onuUpdateForce          bool
 )
 
 // Port management flags
@@ -258,6 +271,30 @@ Examples:
 	RunE: runONUReboot,
 }
 
+var onuUpdateCmd = &cobra.Command{
+	Use:   "onu-update",
+	Short: "Update configuration of an existing ONU",
+	Long: `Update configuration settings for a provisioned ONU.
+
+This command allows you to modify VLAN, traffic profile, or description
+for an already provisioned ONU without reprovisioning.
+
+Examples:
+  # Update VLAN
+  nano-agent onu-update --pon-port 0/1 --onu-id 1 --vlan 200 \
+    --vendor vsol --address 10.0.0.254 --username admin --password admin
+
+  # Update traffic profile
+  nano-agent onu-update --pon-port 0/1 --onu-id 1 --traffic-profile 5 \
+    --vendor vsol --address 10.0.0.254 --username admin --password admin
+
+  # Update both VLAN and traffic profile
+  nano-agent onu-update --pon-port 0/1 --onu-id 1 \
+    --vlan 200 --traffic-profile 5 \
+    --vendor vsol --address 10.0.0.254 --username admin --password admin --json`,
+	RunE: runONUUpdate,
+}
+
 var portListCmd = &cobra.Command{
 	Use:   "port-list",
 	Short: "List all PON ports on an OLT",
@@ -312,7 +349,7 @@ func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
 		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
-		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuRebootCmd,
+		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuRebootCmd, onuUpdateCmd,
 		portListCmd, portEnableCmd, portDisableCmd,
 	}
 	for _, cmd := range oltCommands {
@@ -360,6 +397,7 @@ func init() {
 	onuProvisionCmd.Flags().StringVar(&onuProvSrvProfile, "service-profile", "", "Service profile name")
 	onuProvisionCmd.Flags().StringVar(&onuProvDescription, "description", "", "Subscriber description")
 	onuProvisionCmd.Flags().BoolVar(&onuProvDryRun, "dry-run", false, "Preview the operation without making changes")
+	onuProvisionCmd.Flags().BoolVar(&onuProvForce, "force", false, "Force direct VLAN config (unbind profile if mismatch)")
 	onuProvisionCmd.MarkFlagRequired("serial")
 	onuProvisionCmd.MarkFlagRequired("vlan")
 
@@ -373,6 +411,18 @@ func init() {
 	onuRebootCmd.Flags().StringVar(&onuRebootSerial, "serial", "", "ONU serial number")
 	onuRebootCmd.Flags().StringVar(&onuRebootPONPort, "pon-port", "", "PON port (required if not using serial)")
 	onuRebootCmd.Flags().IntVar(&onuRebootONUID, "onu-id", 0, "ONU ID (required if not using serial)")
+
+	// ONU update flags
+	onuUpdateCmd.Flags().StringVar(&onuUpdatePONPort, "pon-port", "", "PON port [required]")
+	onuUpdateCmd.Flags().IntVar(&onuUpdateONUID, "onu-id", 0, "ONU ID [required]")
+	onuUpdateCmd.Flags().IntVar(&onuUpdateVLAN, "vlan", 0, "New VLAN ID (optional)")
+	onuUpdateCmd.Flags().IntVar(&onuUpdateTrafficProfile, "traffic-profile", 0, "Traffic profile ID (optional)")
+	onuUpdateCmd.Flags().StringVar(&onuUpdateDescription, "description", "", "Description (optional)")
+	onuUpdateCmd.Flags().StringVar(&onuUpdateLineProfile, "line-profile", "", "Line profile name (optional)")
+	onuUpdateCmd.Flags().StringVar(&onuUpdateServiceProfile, "service-profile", "", "Service profile name (optional)")
+	onuUpdateCmd.Flags().BoolVar(&onuUpdateForce, "force", false, "Force unbind profile when switching to direct VLAN config")
+	onuUpdateCmd.MarkFlagRequired("pon-port")
+	onuUpdateCmd.MarkFlagRequired("onu-id")
 
 	// Port enable flags
 	portEnableCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
@@ -392,6 +442,7 @@ func init() {
 	rootCmd.AddCommand(onuProvisionCmd)
 	rootCmd.AddCommand(onuDeleteCmd)
 	rootCmd.AddCommand(onuRebootCmd)
+	rootCmd.AddCommand(onuUpdateCmd)
 	rootCmd.AddCommand(portListCmd)
 	rootCmd.AddCommand(portEnableCmd)
 	rootCmd.AddCommand(portDisableCmd)
@@ -1123,6 +1174,22 @@ func runONUProvision(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Validate profile/VLAN consistency (NAN-247)
+	if onuProvVLAN > 0 && onuProvLineProfile != "" {
+		decision, err := validateProfileVLANConsistency(onuProvLineProfile, onuProvVLAN, onuProvForce)
+		if err != nil {
+			return err
+		}
+		// If direct-vlan decision, clear profile for direct provisioning
+		if decision == "direct-vlan" {
+			if !outputJSON {
+				fmt.Printf("Force unbinding profile, switching to direct VLAN configuration.\n\n")
+			}
+			onuProvLineProfile = ""
+			onuProvSrvProfile = ""
+		}
+	}
+
 	printProvisionHeader(onuProvDryRun, onuProvSerial, onuProvVLAN, onuProvBandwidthDn, onuProvBandwidthUp,
 		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile)
 
@@ -1331,6 +1398,75 @@ func outputRebootResult(serial, ponPort string, onuID int) error {
 	}
 	printRebootSuccess(ponPort, onuID)
 	return nil
+}
+
+func runONUUpdate(cmd *cobra.Command, args []string) error {
+	// Validate at least one update parameter
+	if onuUpdateVLAN == 0 && onuUpdateTrafficProfile == 0 && onuUpdateDescription == "" &&
+		onuUpdateLineProfile == "" && onuUpdateServiceProfile == "" {
+		return fmt.Errorf("at least one update parameter required: --vlan, --traffic-profile, --line-profile, --service-profile, or --description")
+	}
+
+	// Validate profile/VLAN consistency (NAN-250)
+	if onuUpdateVLAN > 0 && onuUpdateLineProfile != "" {
+		decision, err := validateProfileVLANConsistency(onuUpdateLineProfile, onuUpdateVLAN, onuUpdateForce)
+		if err != nil {
+			return err
+		}
+		// Store decision for buildUpdateModels
+		if decision == "direct-vlan" {
+			if !outputJSON {
+				fmt.Printf("Force unbinding profile, switching to direct VLAN configuration.\n\n")
+			}
+			// User wants direct VLAN with --force, clear profile flags
+			onuUpdateLineProfile = ""
+			onuUpdateServiceProfile = ""
+		}
+	}
+
+	printUpdateHeader(onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN, onuUpdateTrafficProfile, onuUpdateDescription, onuUpdateLineProfile, onuUpdateServiceProfile)
+
+	conn, err := connectToOLT(120)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	// Get DriverV2 for ONU lookup
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	// Verify ONU exists and get pre-state
+	preONU, err := lookupONUByPortID(conn.ctx, driverV2, onuUpdatePONPort, onuUpdateONUID)
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		printCurrentConfig(preONU)
+	}
+
+	// Build update models
+	subscriber, tier := buildUpdateModels(preONU, onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN, onuUpdateTrafficProfile, onuUpdateDescription, onuUpdateLineProfile, onuUpdateServiceProfile)
+
+	// Execute update
+	if err := executeUpdate(conn.ctx, conn.driver, subscriber, tier); err != nil {
+		return err
+	}
+
+	// Verify changes (wait for OLT to process)
+	time.Sleep(1 * time.Second)
+	postONU, err := lookupONUByPortID(conn.ctx, driverV2, onuUpdatePONPort, onuUpdateONUID)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("Warning: Could not verify changes: %v\n", err)
+		}
+		postONU = preONU
+	}
+
+	return outputUpdateResult(preONU, postONU, onuUpdateVLAN, onuUpdateTrafficProfile)
 }
 
 func runPortList(cmd *cobra.Command, args []string) error {

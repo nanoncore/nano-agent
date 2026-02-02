@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nanoncore/nano-southbound/model"
 	"github.com/nanoncore/nano-southbound/types"
 )
 
@@ -121,6 +124,29 @@ func lookupONUBySerial(ctx context.Context, driverV2 types.DriverV2, serial stri
 	if !outputJSON {
 		fmt.Printf("OK (port %s, id %d)\n", onu.PONPort, onu.ONUID)
 	}
+
+	// Enrich with detailed info including VLAN (NAN-242)
+	if detailProvider, ok := driverV2.(interface {
+		GetONUDetails(ctx context.Context, ponPort string, onuID int) (*types.ONUInfo, error)
+	}); ok {
+		detailedONU, err := detailProvider.GetONUDetails(ctx, onu.PONPort, onu.ONUID)
+		if err == nil && detailedONU != nil {
+			// Merge detailed info into basic ONU info
+			onu.RxPowerDBm = detailedONU.RxPowerDBm
+			onu.TxPowerDBm = detailedONU.TxPowerDBm
+			onu.Temperature = detailedONU.Temperature
+			onu.Voltage = detailedONU.Voltage
+			onu.BiasCurrent = detailedONU.BiasCurrent
+			onu.BytesUp = detailedONU.BytesUp
+			onu.BytesDown = detailedONU.BytesDown
+			onu.PacketsUp = detailedONU.PacketsUp
+			onu.PacketsDown = detailedONU.PacketsDown
+			onu.InputRateBps = detailedONU.InputRateBps
+			onu.OutputRateBps = detailedONU.OutputRateBps
+			onu.VLAN = detailedONU.VLAN
+		}
+	}
+
 	return onu, nil
 }
 
@@ -143,6 +169,29 @@ func lookupONUByPortID(ctx context.Context, driverV2 types.DriverV2, ponPort str
 			if !outputJSON {
 				fmt.Printf("OK\n")
 			}
+
+			// Enrich with detailed info including VLAN (NAN-242)
+			if detailProvider, ok := driverV2.(interface {
+				GetONUDetails(ctx context.Context, ponPort string, onuID int) (*types.ONUInfo, error)
+			}); ok {
+				detailedONU, err := detailProvider.GetONUDetails(ctx, ponPort, onuID)
+				if err == nil && detailedONU != nil {
+					// Merge detailed info into basic ONU info
+					onus[i].RxPowerDBm = detailedONU.RxPowerDBm
+					onus[i].TxPowerDBm = detailedONU.TxPowerDBm
+					onus[i].Temperature = detailedONU.Temperature
+					onus[i].Voltage = detailedONU.Voltage
+					onus[i].BiasCurrent = detailedONU.BiasCurrent
+					onus[i].BytesUp = detailedONU.BytesUp
+					onus[i].BytesDown = detailedONU.BytesDown
+					onus[i].PacketsUp = detailedONU.PacketsUp
+					onus[i].PacketsDown = detailedONU.PacketsDown
+					onus[i].InputRateBps = detailedONU.InputRateBps
+					onus[i].OutputRateBps = detailedONU.OutputRateBps
+					onus[i].VLAN = detailedONU.VLAN
+				}
+			}
+
 			return &onus[i], nil
 		}
 	}
@@ -506,4 +555,433 @@ func boolToStatus(b bool) string {
 		return "OK"
 	}
 	return "FAILED"
+}
+
+// =============================================================================
+// Update Helpers
+// =============================================================================
+
+func printUpdateHeader(ponPort string, onuID, vlan, trafficProfile int, description, lineProfile, serviceProfile string) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU Configuration Update\n")
+	fmt.Printf("========================\n\n")
+	fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+	fmt.Printf("ONU: %s ONU %d\n\n", ponPort, onuID)
+	fmt.Printf("Updates to Apply:\n")
+	if vlan > 0 {
+		fmt.Printf("  VLAN:            %d\n", vlan)
+	}
+	if trafficProfile > 0 {
+		fmt.Printf("  Traffic Profile: %d\n", trafficProfile)
+	}
+	if description != "" {
+		fmt.Printf("  Description:     %s\n", description)
+	}
+	if lineProfile != "" {
+		fmt.Printf("  Line Profile:    %s\n", lineProfile)
+	}
+	if serviceProfile != "" {
+		fmt.Printf("  Service Profile: %s\n", serviceProfile)
+	}
+	fmt.Println()
+}
+
+func printCurrentConfig(onu *types.ONUInfo) {
+	fmt.Printf("Current Configuration\n")
+	fmt.Printf("---------------------\n")
+	fmt.Printf("  Serial:          %s\n", onu.Serial)
+	fmt.Printf("  Status:          %s\n", onu.OperState)
+	if onu.VLAN > 0 {
+		fmt.Printf("  VLAN:            %d\n", onu.VLAN)
+	}
+	if onu.LineProfile != "" {
+		fmt.Printf("  Line Profile:    %s\n", onu.LineProfile)
+	}
+	if onu.ServiceProfile != "" {
+		fmt.Printf("  Service Profile: %s\n", onu.ServiceProfile)
+	}
+	fmt.Println()
+}
+
+// validateProfileVLANConsistency checks if line profile and VLAN are consistent
+// Returns decision ("profile" | "direct-vlan") and error if validation fails
+func validateProfileVLANConsistency(lineProfile string, vlan int, force bool) (string, error) {
+	// No validation needed if either parameter is empty/zero
+	if lineProfile == "" || vlan == 0 {
+		return "", nil
+	}
+
+	// Extract VLAN from profile name convention (line_vlan_100 → 100)
+	re := regexp.MustCompile(`(?:line[_-])?vlan[_-](\d+)`)
+	match := re.FindStringSubmatch(lineProfile)
+
+	if len(match) == 2 {
+		extractedVLAN, err := strconv.Atoi(match[1])
+		if err == nil {
+			if extractedVLAN == vlan {
+				// Match: Apply profile binding
+				return "profile", nil
+			}
+
+			// Mismatch detected
+			if force {
+				// User confirmed: unbind and apply direct VLAN
+				return "direct-vlan", nil
+			}
+
+			// No --force: Fail validation
+			return "", fmt.Errorf(
+				"profile/VLAN mismatch: profile '%s' implies VLAN %d, but --vlan %d provided\n"+
+					"  Use profile-only:  --line-profile %s (omit --vlan)\n"+
+					"  Use VLAN-only:     --vlan %d (omit --line-profile)\n"+
+					"  Use --force flag:  --vlan %d --force (unbind profile, apply direct config)",
+				lineProfile, extractedVLAN, vlan, lineProfile, vlan, vlan,
+			)
+		}
+	}
+
+	// Convention not followed: trust user, apply profile
+	return "profile", nil
+}
+
+// buildUpdateModels creates subscriber and tier models for update
+func buildUpdateModels(preONU *types.ONUInfo, ponPort string, onuID, vlan, trafficProfile int, description, lineProfile, serviceProfile string) (*model.Subscriber, *model.ServiceTier) {
+	subscriber := &model.Subscriber{
+		Name: preONU.Serial,
+		Annotations: map[string]string{
+			"nano.io/pon-port": ponPort,
+			"nano.io/onu-id":   fmt.Sprintf("%d", onuID),
+		},
+		Spec: model.SubscriberSpec{
+			ONUSerial: preONU.Serial,
+			VLAN:      preONU.VLAN, // Keep existing VLAN by default
+			Tier:      "cli-update",
+		},
+	}
+
+	// Three-way logic for profile/VLAN updates (NAN-251)
+	if lineProfile != "" || serviceProfile != "" {
+		// Scenario 1: Profile update
+		if lineProfile != "" {
+			subscriber.Annotations["nano.io/line-profile"] = lineProfile
+		}
+		if serviceProfile != "" {
+			subscriber.Annotations["nano.io/service-profile"] = serviceProfile
+		}
+	} else if vlan > 0 {
+		// Scenario 2/3: VLAN-only update
+		subscriber.Spec.VLAN = vlan
+		if preONU.LineProfile != "" {
+			// Mark for profile unbinding (ONU currently has profile)
+			subscriber.Annotations["nano.io/unbind-profile"] = "true"
+		}
+	} else {
+		// No VLAN or profile update, preserve existing profiles
+		if preONU.LineProfile != "" {
+			subscriber.Annotations["nano.io/line-profile"] = preONU.LineProfile
+		}
+		if preONU.ServiceProfile != "" {
+			subscriber.Annotations["nano.io/service-profile"] = preONU.ServiceProfile
+		}
+	}
+
+	// Apply VLAN update for profile scenario (match case)
+	if vlan > 0 && (lineProfile != "" || serviceProfile != "") {
+		subscriber.Spec.VLAN = vlan
+	}
+
+	// Apply description update if specified
+	if description != "" {
+		subscriber.Spec.Description = description
+	}
+
+	tier := &model.ServiceTier{
+		Name: "cli-update",
+		Spec: model.ServiceTierSpec{
+			BandwidthDown: preONU.BandwidthDown,
+			BandwidthUp:   preONU.BandwidthUp,
+			QoSClass:      "standard",
+		},
+	}
+
+	// Apply traffic profile (bandwidth) update if specified
+	// Note: trafficProfile parameter would need to be mapped to actual bandwidth values
+	// For now, we preserve existing bandwidth unless explicitly changed via tier
+	if trafficProfile > 0 {
+		// Store traffic profile ID in annotations for driver to handle
+		subscriber.Annotations["nano.io/traffic-profile"] = fmt.Sprintf("%d", trafficProfile)
+	}
+
+	return subscriber, tier
+}
+
+// executeUpdate performs the ONU configuration update
+func executeUpdate(ctx context.Context, driver types.Driver, subscriber *model.Subscriber, tier *model.ServiceTier) error {
+	if !outputJSON {
+		fmt.Printf("Updating ONU configuration... ")
+	}
+	err := driver.UpdateSubscriber(ctx, subscriber, tier)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("update failed: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+	return nil
+}
+
+func outputUpdateResult(preONU, postONU *types.ONUInfo, vlan, trafficProfile int) error {
+	if outputJSON {
+		return outputUpdateResultJSON(preONU, postONU, vlan, trafficProfile)
+	}
+
+	fmt.Printf("\nUpdate Complete\n")
+	fmt.Printf("---------------\n")
+
+	if vlan > 0 {
+		if postONU.VLAN == vlan {
+			fmt.Printf("  VLAN:            %d → %d ✓\n", preONU.VLAN, postONU.VLAN)
+		} else {
+			fmt.Printf("  VLAN:            %d → %d (verification pending)\n", preONU.VLAN, vlan)
+		}
+	}
+
+	if trafficProfile > 0 {
+		fmt.Printf("  Traffic Profile: Applied (ID: %d)\n", trafficProfile)
+	}
+
+	fmt.Printf("  Status:          %s\n", postONU.OperState)
+
+	if postONU.IsOnline {
+		fmt.Printf("\nONU is online and operational.\n")
+	}
+
+	return nil
+}
+
+func outputUpdateResultJSON(preONU, postONU *types.ONUInfo, vlan, trafficProfile int) error {
+	output := struct {
+		Success   bool                   `json:"success"`
+		PreState  *types.ONUInfo         `json:"pre_state"`
+		PostState *types.ONUInfo         `json:"post_state"`
+		Updates   map[string]interface{} `json:"updates"`
+	}{
+		Success:   true,
+		PreState:  preONU,
+		PostState: postONU,
+		Updates:   make(map[string]interface{}),
+	}
+
+	if vlan > 0 {
+		output.Updates["vlan"] = map[string]interface{}{
+			"requested": vlan,
+			"previous":  preONU.VLAN,
+			"current":   postONU.VLAN,
+			"verified":  postONU.VLAN == vlan,
+		}
+	}
+
+	if trafficProfile > 0 {
+		output.Updates["traffic_profile"] = map[string]interface{}{
+			"requested": trafficProfile,
+			"applied":   true,
+		}
+	}
+
+	data, _ := json.MarshalIndent(output, "", "  ")
+	fmt.Println(string(data))
+	return nil
+}
+
+// =============================================================================
+// Verification & Retry Logic (NAN-257)
+// =============================================================================
+
+// verifyONUChange performs a generic retry verification of an OLT operation
+// It retries up to maxRetries times with retryDelay between attempts
+func verifyONUChange(ctx context.Context, verifyFunc func() (bool, error), maxRetries int, retryDelay time.Duration) error {
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Wait before checking (give OLT time to process)
+		time.Sleep(retryDelay)
+
+		success, err := verifyFunc()
+		if err != nil {
+			return fmt.Errorf("verification error: %w", err)
+		}
+
+		if success {
+			if attempt > 1 && !outputJSON {
+				fmt.Printf("  Verified on attempt %d/%d\n", attempt, maxRetries)
+			}
+			return nil
+		}
+
+		if attempt < maxRetries && !outputJSON {
+			fmt.Printf("  Change not reflected yet (attempt %d/%d), retrying...\n", attempt, maxRetries)
+		}
+	}
+
+	return fmt.Errorf("change not reflected on OLT after %d attempts", maxRetries)
+}
+
+// verifyONUProvision verifies that an ONU was successfully provisioned
+func verifyONUProvision(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int) error {
+	if !outputJSON {
+		fmt.Printf("Verifying ONU provisioning... ")
+	}
+
+	verifyFunc := func() (bool, error) {
+		onu, err := lookupONUByPortID(ctx, driverV2, ponPort, onuID)
+		if err != nil {
+			return false, nil // ONU not found yet, but not an error - keep retrying
+		}
+		// ONU should exist and be online
+		return onu != nil && onu.IsOnline, nil
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
+}
+
+// verifyVLANUpdate verifies that a VLAN update was successfully applied
+func verifyVLANUpdate(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID, expectedVLAN int) error {
+	if !outputJSON {
+		fmt.Printf("Verifying VLAN update... ")
+	}
+
+	// Check if driver has SNMP VLAN verification capability
+	type vlanVerifier interface {
+		GetONUVLANViaSNMP(ctx context.Context, ponPort string, onuID int) (int, error)
+	}
+
+	verifier, hasSNMP := driverV2.(vlanVerifier)
+
+	verifyFunc := func() (bool, error) {
+		if hasSNMP {
+			// Prefer SNMP verification for accuracy
+			snmpVLAN, err := verifier.GetONUVLANViaSNMP(ctx, ponPort, onuID)
+			if err != nil {
+				return false, nil // SNMP failed, retry
+			}
+			return snmpVLAN == expectedVLAN, nil
+		}
+
+		// Fallback: Check via GetONUDetails
+		if detailProvider, ok := driverV2.(interface {
+			GetONUDetails(ctx context.Context, ponPort string, onuID int) (*types.ONUInfo, error)
+		}); ok {
+			onu, err := detailProvider.GetONUDetails(ctx, ponPort, onuID)
+			if err != nil {
+				return false, nil // Details fetch failed, retry
+			}
+			return onu.VLAN == expectedVLAN, nil
+		}
+
+		// No verification method available
+		return false, fmt.Errorf("driver does not support VLAN verification")
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
+}
+
+// verifyLineProfileAssociation verifies that a line profile was applied to an ONU
+func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int, lineProfile string) error {
+	if !outputJSON {
+		fmt.Printf("Verifying line profile association... ")
+	}
+
+	// Check if driver has running config capability
+	type configProvider interface {
+		GetONURunningConfig(ctx context.Context, ponPort string, onuID int) (string, error)
+	}
+
+	provider, hasConfig := driverV2.(configProvider)
+	if !hasConfig {
+		// No verification method available, skip
+		if !outputJSON {
+			fmt.Printf("SKIPPED (not supported)\n")
+		}
+		return nil
+	}
+
+	verifyFunc := func() (bool, error) {
+		config, err := provider.GetONURunningConfig(ctx, ponPort, onuID)
+		if err != nil {
+			return false, nil // Config fetch failed, retry
+		}
+		// Check if line profile is in the running config
+		return strings.Contains(config, fmt.Sprintf("profile line %s", lineProfile)), nil
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
+}
+
+// verifyONUDeletion verifies that an ONU was successfully deleted
+func verifyONUDeletion(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int) error {
+	if !outputJSON {
+		fmt.Printf("Verifying ONU deletion... ")
+	}
+
+	verifyFunc := func() (bool, error) {
+		onu, err := lookupONUByPortID(ctx, driverV2, ponPort, onuID)
+		if err != nil {
+			// ONU not found - deletion successful
+			if strings.Contains(err.Error(), "not found") {
+				return true, nil
+			}
+			return false, nil // Other error, retry
+		}
+		// ONU still exists
+		return onu == nil, nil
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 1*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
 }

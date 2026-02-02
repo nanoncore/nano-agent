@@ -459,11 +459,17 @@ func (e *Executor) handleONUProvision(ctx context.Context, driver cli.CLIDriver,
 	if ponPort == "" {
 		return nil, fmt.Errorf("ponPort is required")
 	}
-	if lineProfile == "" {
-		return nil, fmt.Errorf("lineProfile is required")
-	}
-	if serviceProfile == "" {
-		return nil, fmt.Errorf("serviceProfile is required")
+
+	// NAN-241: Profiles are optional for V-SOL (uses onu confirm auto-provision)
+	// For other vendors (Huawei, ZTE), profiles are required
+	vendor := driver.Vendor()
+	if vendor != "vsol" {
+		if lineProfile == "" {
+			return nil, fmt.Errorf("lineProfile is required for vendor %s", vendor)
+		}
+		if serviceProfile == "" {
+			return nil, fmt.Errorf("serviceProfile is required for vendor %s", vendor)
+		}
 	}
 
 	// Create provision request
