@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -560,7 +561,7 @@ func boolToStatus(b bool) string {
 // Update Helpers
 // =============================================================================
 
-func printUpdateHeader(ponPort string, onuID, vlan, trafficProfile int, description string) {
+func printUpdateHeader(ponPort string, onuID, vlan, trafficProfile int, description, lineProfile, serviceProfile string) {
 	if outputJSON {
 		return
 	}
@@ -577,6 +578,12 @@ func printUpdateHeader(ponPort string, onuID, vlan, trafficProfile int, descript
 	}
 	if description != "" {
 		fmt.Printf("  Description:     %s\n", description)
+	}
+	if lineProfile != "" {
+		fmt.Printf("  Line Profile:    %s\n", lineProfile)
+	}
+	if serviceProfile != "" {
+		fmt.Printf("  Service Profile: %s\n", serviceProfile)
 	}
 	fmt.Println()
 }
@@ -598,8 +605,49 @@ func printCurrentConfig(onu *types.ONUInfo) {
 	fmt.Println()
 }
 
+// validateProfileVLANConsistency checks if line profile and VLAN are consistent
+// Returns decision ("profile" | "direct-vlan") and error if validation fails
+func validateProfileVLANConsistency(lineProfile string, vlan int, force bool) (string, error) {
+	// No validation needed if either parameter is empty/zero
+	if lineProfile == "" || vlan == 0 {
+		return "", nil
+	}
+
+	// Extract VLAN from profile name convention (line_vlan_100 → 100)
+	re := regexp.MustCompile(`(?:line[_-])?vlan[_-](\d+)`)
+	match := re.FindStringSubmatch(lineProfile)
+
+	if len(match) == 2 {
+		extractedVLAN, err := strconv.Atoi(match[1])
+		if err == nil {
+			if extractedVLAN == vlan {
+				// Match: Apply profile binding
+				return "profile", nil
+			}
+
+			// Mismatch detected
+			if force {
+				// User confirmed: unbind and apply direct VLAN
+				return "direct-vlan", nil
+			}
+
+			// No --force: Fail validation
+			return "", fmt.Errorf(
+				"profile/VLAN mismatch: profile '%s' implies VLAN %d, but --vlan %d provided\n"+
+					"  Use profile-only:  --line-profile %s (omit --vlan)\n"+
+					"  Use VLAN-only:     --vlan %d (omit --line-profile)\n"+
+					"  Use --force flag:  --vlan %d --force (unbind profile, apply direct config)",
+				lineProfile, extractedVLAN, vlan, lineProfile, vlan, vlan,
+			)
+		}
+	}
+
+	// Convention not followed: trust user, apply profile
+	return "profile", nil
+}
+
 // buildUpdateModels creates subscriber and tier models for update
-func buildUpdateModels(preONU *types.ONUInfo, ponPort string, onuID, vlan, trafficProfile int, description string) (*model.Subscriber, *model.ServiceTier) {
+func buildUpdateModels(preONU *types.ONUInfo, ponPort string, onuID, vlan, trafficProfile int, description, lineProfile, serviceProfile string) (*model.Subscriber, *model.ServiceTier) {
 	subscriber := &model.Subscriber{
 		Name: preONU.Serial,
 		Annotations: map[string]string{
@@ -613,22 +661,40 @@ func buildUpdateModels(preONU *types.ONUInfo, ponPort string, onuID, vlan, traff
 		},
 	}
 
-	// Apply VLAN update if specified
-	if vlan > 0 {
+	// Three-way logic for profile/VLAN updates (NAN-251)
+	if lineProfile != "" || serviceProfile != "" {
+		// Scenario 1: Profile update
+		if lineProfile != "" {
+			subscriber.Annotations["nano.io/line-profile"] = lineProfile
+		}
+		if serviceProfile != "" {
+			subscriber.Annotations["nano.io/service-profile"] = serviceProfile
+		}
+	} else if vlan > 0 {
+		// Scenario 2/3: VLAN-only update
+		subscriber.Spec.VLAN = vlan
+		if preONU.LineProfile != "" {
+			// Mark for profile unbinding (ONU currently has profile)
+			subscriber.Annotations["nano.io/unbind-profile"] = "true"
+		}
+	} else {
+		// No VLAN or profile update, preserve existing profiles
+		if preONU.LineProfile != "" {
+			subscriber.Annotations["nano.io/line-profile"] = preONU.LineProfile
+		}
+		if preONU.ServiceProfile != "" {
+			subscriber.Annotations["nano.io/service-profile"] = preONU.ServiceProfile
+		}
+	}
+
+	// Apply VLAN update for profile scenario (match case)
+	if vlan > 0 && (lineProfile != "" || serviceProfile != "") {
 		subscriber.Spec.VLAN = vlan
 	}
 
 	// Apply description update if specified
 	if description != "" {
 		subscriber.Spec.Description = description
-	}
-
-	// Preserve existing profiles
-	if preONU.LineProfile != "" {
-		subscriber.Annotations["nano.io/line-profile"] = preONU.LineProfile
-	}
-	if preONU.ServiceProfile != "" {
-		subscriber.Annotations["nano.io/service-profile"] = preONU.ServiceProfile
 	}
 
 	tier := &model.ServiceTier{

@@ -140,6 +140,7 @@ var (
 	onuProvSrvProfile  string
 	onuProvDescription string
 	onuProvDryRun      bool
+	onuProvForce       bool
 )
 
 // ONU delete flags
@@ -164,6 +165,9 @@ var (
 	onuUpdateVLAN           int
 	onuUpdateTrafficProfile int
 	onuUpdateDescription    string
+	onuUpdateLineProfile    string
+	onuUpdateServiceProfile string
+	onuUpdateForce          bool
 )
 
 // Port management flags
@@ -393,6 +397,7 @@ func init() {
 	onuProvisionCmd.Flags().StringVar(&onuProvSrvProfile, "service-profile", "", "Service profile name")
 	onuProvisionCmd.Flags().StringVar(&onuProvDescription, "description", "", "Subscriber description")
 	onuProvisionCmd.Flags().BoolVar(&onuProvDryRun, "dry-run", false, "Preview the operation without making changes")
+	onuProvisionCmd.Flags().BoolVar(&onuProvForce, "force", false, "Force direct VLAN config (unbind profile if mismatch)")
 	onuProvisionCmd.MarkFlagRequired("serial")
 	onuProvisionCmd.MarkFlagRequired("vlan")
 
@@ -413,6 +418,9 @@ func init() {
 	onuUpdateCmd.Flags().IntVar(&onuUpdateVLAN, "vlan", 0, "New VLAN ID (optional)")
 	onuUpdateCmd.Flags().IntVar(&onuUpdateTrafficProfile, "traffic-profile", 0, "Traffic profile ID (optional)")
 	onuUpdateCmd.Flags().StringVar(&onuUpdateDescription, "description", "", "Description (optional)")
+	onuUpdateCmd.Flags().StringVar(&onuUpdateLineProfile, "line-profile", "", "Line profile name (optional)")
+	onuUpdateCmd.Flags().StringVar(&onuUpdateServiceProfile, "service-profile", "", "Service profile name (optional)")
+	onuUpdateCmd.Flags().BoolVar(&onuUpdateForce, "force", false, "Force unbind profile when switching to direct VLAN config")
 	onuUpdateCmd.MarkFlagRequired("pon-port")
 	onuUpdateCmd.MarkFlagRequired("onu-id")
 
@@ -1166,6 +1174,22 @@ func runONUProvision(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Validate profile/VLAN consistency (NAN-247)
+	if onuProvVLAN > 0 && onuProvLineProfile != "" {
+		decision, err := validateProfileVLANConsistency(onuProvLineProfile, onuProvVLAN, onuProvForce)
+		if err != nil {
+			return err
+		}
+		// If direct-vlan decision, clear profile for direct provisioning
+		if decision == "direct-vlan" {
+			if !outputJSON {
+				fmt.Printf("Force unbinding profile, switching to direct VLAN configuration.\n\n")
+			}
+			onuProvLineProfile = ""
+			onuProvSrvProfile = ""
+		}
+	}
+
 	printProvisionHeader(onuProvDryRun, onuProvSerial, onuProvVLAN, onuProvBandwidthDn, onuProvBandwidthUp,
 		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile)
 
@@ -1378,11 +1402,29 @@ func outputRebootResult(serial, ponPort string, onuID int) error {
 
 func runONUUpdate(cmd *cobra.Command, args []string) error {
 	// Validate at least one update parameter
-	if onuUpdateVLAN == 0 && onuUpdateTrafficProfile == 0 && onuUpdateDescription == "" {
-		return fmt.Errorf("at least one update parameter required: --vlan, --traffic-profile, or --description")
+	if onuUpdateVLAN == 0 && onuUpdateTrafficProfile == 0 && onuUpdateDescription == "" &&
+		onuUpdateLineProfile == "" && onuUpdateServiceProfile == "" {
+		return fmt.Errorf("at least one update parameter required: --vlan, --traffic-profile, --line-profile, --service-profile, or --description")
 	}
 
-	printUpdateHeader(onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN, onuUpdateTrafficProfile, onuUpdateDescription)
+	// Validate profile/VLAN consistency (NAN-250)
+	if onuUpdateVLAN > 0 && onuUpdateLineProfile != "" {
+		decision, err := validateProfileVLANConsistency(onuUpdateLineProfile, onuUpdateVLAN, onuUpdateForce)
+		if err != nil {
+			return err
+		}
+		// Store decision for buildUpdateModels
+		if decision == "direct-vlan" {
+			if !outputJSON {
+				fmt.Printf("Force unbinding profile, switching to direct VLAN configuration.\n\n")
+			}
+			// User wants direct VLAN with --force, clear profile flags
+			onuUpdateLineProfile = ""
+			onuUpdateServiceProfile = ""
+		}
+	}
+
+	printUpdateHeader(onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN, onuUpdateTrafficProfile, onuUpdateDescription, onuUpdateLineProfile, onuUpdateServiceProfile)
 
 	conn, err := connectToOLT(120)
 	if err != nil {
@@ -1407,7 +1449,7 @@ func runONUUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build update models
-	subscriber, tier := buildUpdateModels(preONU, onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN, onuUpdateTrafficProfile, onuUpdateDescription)
+	subscriber, tier := buildUpdateModels(preONU, onuUpdatePONPort, onuUpdateONUID, onuUpdateVLAN, onuUpdateTrafficProfile, onuUpdateDescription, onuUpdateLineProfile, onuUpdateServiceProfile)
 
 	// Execute update
 	if err := executeUpdate(conn.ctx, conn.driver, subscriber, tier); err != nil {
