@@ -1498,19 +1498,19 @@ func runONUUpdate(cmd *cobra.Command, args []string) error {
 		printCurrentConfig(preONU)
 	}
 
-	// Detect if profile change OR line profile blocking is required (NAN-259)
-	// CRITICAL: Line profiles BLOCK direct VLAN changes (validated Test 7)
-	needsReProvision := (onuUpdateLineProfile != "" && onuUpdateLineProfile != preONU.LineProfile) ||
-		(onuUpdateVLAN > 0 && preONU.LineProfile != "")
+	// Detect if profile change is required (NAN-259)
+	// Optimization: Only re-provision if profile actually changes, not just because line profile is bound
+	profileChanged := onuUpdateLineProfile != "" && onuUpdateLineProfile != preONU.LineProfile
+
+	// Check if we should try direct VLAN update first (profile unchanged scenario)
+	// CRITICAL: Line profiles MAY BLOCK direct VLAN changes (validated Test 7)
+	// But if profile is unchanged, try direct update first before re-provisioning
+	needsReProvision := profileChanged
 
 	if needsReProvision {
-		// Flow 2: Delete + Re-provision
+		// Flow 2: Delete + Re-provision (profile change)
 		if !outputJSON {
-			if preONU.LineProfile != "" && onuUpdateLineProfile == "" {
-				fmt.Printf("\n⚠ ONU has line profile '%s' which blocks direct VLAN changes\n", preONU.LineProfile)
-			} else if onuUpdateLineProfile != "" && onuUpdateLineProfile != preONU.LineProfile {
-				fmt.Printf("\n⚠ Profile change requires ONU re-provisioning (brief service interruption)\n")
-			}
+			fmt.Printf("\n⚠ Profile change requires ONU re-provisioning (brief service interruption)\n")
 			fmt.Printf("Starting delete+re-provision flow...\n\n")
 		}
 
@@ -1651,6 +1651,13 @@ func runONUUpdate(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			if !outputJSON {
 				fmt.Printf("FAILED\n")
+			}
+			// If ONU has line profile, VLAN update may have been blocked
+			if preONU.LineProfile != "" {
+				return fmt.Errorf(
+					"VLAN update verification failed. ONU is managed by line profile '%s' which may be blocking direct VLAN changes. "+
+						"Use --line-profile %s to trigger delete+re-provision with the same profile.",
+					preONU.LineProfile, preONU.LineProfile)
 			}
 			return fmt.Errorf("VLAN update failed verification: %w", err)
 		}
