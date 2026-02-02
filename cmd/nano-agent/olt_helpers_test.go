@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestValidateSerialNumber(t *testing.T) {
@@ -321,6 +324,82 @@ func TestValidateProfileVLANConsistency(t *testing.T) {
 						t.Errorf("Error message too short, expected detailed guidance: %q", errMsg)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestVerifyONUChange tests the generic retry verification logic (NAN-257)
+func TestVerifyONUChange(t *testing.T) {
+	tests := []struct {
+		name         string
+		verifyFunc   func() (bool, error)
+		maxRetries   int
+		retryDelay   time.Duration
+		expectErr    bool
+		expectAttempts int
+	}{
+		{
+			name: "success on first attempt",
+			verifyFunc: func() (bool, error) {
+				return true, nil
+			},
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      false,
+			expectAttempts: 1,
+		},
+		{
+			name: "success on second attempt",
+			verifyFunc: (func() func() (bool, error) {
+				attempt := 0
+				return func() (bool, error) {
+					attempt++
+					if attempt == 2 {
+						return true, nil
+					}
+					return false, nil
+				}
+			})(),
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      false,
+			expectAttempts: 2,
+		},
+		{
+			name: "fail all retries",
+			verifyFunc: func() (bool, error) {
+				return false, nil
+			},
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      true,
+			expectAttempts: 3,
+		},
+		{
+			name: "verification error",
+			verifyFunc: func() (bool, error) {
+				return false, fmt.Errorf("verification error")
+			},
+			maxRetries:     3,
+			retryDelay:     1 * time.Millisecond,
+			expectErr:      true,
+			expectAttempts: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Save original outputJSON state and restore after test
+			origOutputJSON := outputJSON
+			outputJSON = true
+			defer func() { outputJSON = origOutputJSON }()
+
+			ctx := context.Background()
+			err := verifyONUChange(ctx, tt.verifyFunc, tt.maxRetries, tt.retryDelay)
+
+			if (err != nil) != tt.expectErr {
+				t.Errorf("verifyONUChange() error = %v, expectErr %v", err, tt.expectErr)
 			}
 		})
 	}

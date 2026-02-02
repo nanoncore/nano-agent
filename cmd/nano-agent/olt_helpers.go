@@ -797,3 +797,191 @@ func outputUpdateResultJSON(preONU, postONU *types.ONUInfo, vlan, trafficProfile
 	fmt.Println(string(data))
 	return nil
 }
+
+// =============================================================================
+// Verification & Retry Logic (NAN-257)
+// =============================================================================
+
+// verifyONUChange performs a generic retry verification of an OLT operation
+// It retries up to maxRetries times with retryDelay between attempts
+func verifyONUChange(ctx context.Context, verifyFunc func() (bool, error), maxRetries int, retryDelay time.Duration) error {
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		// Wait before checking (give OLT time to process)
+		time.Sleep(retryDelay)
+
+		success, err := verifyFunc()
+		if err != nil {
+			return fmt.Errorf("verification error: %w", err)
+		}
+
+		if success {
+			if attempt > 1 && !outputJSON {
+				fmt.Printf("  Verified on attempt %d/%d\n", attempt, maxRetries)
+			}
+			return nil
+		}
+
+		if attempt < maxRetries && !outputJSON {
+			fmt.Printf("  Change not reflected yet (attempt %d/%d), retrying...\n", attempt, maxRetries)
+		}
+	}
+
+	return fmt.Errorf("change not reflected on OLT after %d attempts", maxRetries)
+}
+
+// verifyONUProvision verifies that an ONU was successfully provisioned
+func verifyONUProvision(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int) error {
+	if !outputJSON {
+		fmt.Printf("Verifying ONU provisioning... ")
+	}
+
+	verifyFunc := func() (bool, error) {
+		onu, err := lookupONUByPortID(ctx, driverV2, ponPort, onuID)
+		if err != nil {
+			return false, nil // ONU not found yet, but not an error - keep retrying
+		}
+		// ONU should exist and be online
+		return onu != nil && onu.IsOnline, nil
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
+}
+
+// verifyVLANUpdate verifies that a VLAN update was successfully applied
+func verifyVLANUpdate(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID, expectedVLAN int) error {
+	if !outputJSON {
+		fmt.Printf("Verifying VLAN update... ")
+	}
+
+	// Check if driver has SNMP VLAN verification capability
+	type vlanVerifier interface {
+		GetONUVLANViaSNMP(ctx context.Context, ponPort string, onuID int) (int, error)
+	}
+
+	verifier, hasSNMP := driverV2.(vlanVerifier)
+
+	verifyFunc := func() (bool, error) {
+		if hasSNMP {
+			// Prefer SNMP verification for accuracy
+			snmpVLAN, err := verifier.GetONUVLANViaSNMP(ctx, ponPort, onuID)
+			if err != nil {
+				return false, nil // SNMP failed, retry
+			}
+			return snmpVLAN == expectedVLAN, nil
+		}
+
+		// Fallback: Check via GetONUDetails
+		if detailProvider, ok := driverV2.(interface {
+			GetONUDetails(ctx context.Context, ponPort string, onuID int) (*types.ONUInfo, error)
+		}); ok {
+			onu, err := detailProvider.GetONUDetails(ctx, ponPort, onuID)
+			if err != nil {
+				return false, nil // Details fetch failed, retry
+			}
+			return onu.VLAN == expectedVLAN, nil
+		}
+
+		// No verification method available
+		return false, fmt.Errorf("driver does not support VLAN verification")
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
+}
+
+// verifyLineProfileAssociation verifies that a line profile was applied to an ONU
+func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int, lineProfile string) error {
+	if !outputJSON {
+		fmt.Printf("Verifying line profile association... ")
+	}
+
+	// Check if driver has running config capability
+	type configProvider interface {
+		GetONURunningConfig(ctx context.Context, ponPort string, onuID int) (string, error)
+	}
+
+	provider, hasConfig := driverV2.(configProvider)
+	if !hasConfig {
+		// No verification method available, skip
+		if !outputJSON {
+			fmt.Printf("SKIPPED (not supported)\n")
+		}
+		return nil
+	}
+
+	verifyFunc := func() (bool, error) {
+		config, err := provider.GetONURunningConfig(ctx, ponPort, onuID)
+		if err != nil {
+			return false, nil // Config fetch failed, retry
+		}
+		// Check if line profile is in the running config
+		return strings.Contains(config, fmt.Sprintf("profile line %s", lineProfile)), nil
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
+}
+
+// verifyONUDeletion verifies that an ONU was successfully deleted
+func verifyONUDeletion(ctx context.Context, driverV2 types.DriverV2, ponPort string, onuID int) error {
+	if !outputJSON {
+		fmt.Printf("Verifying ONU deletion... ")
+	}
+
+	verifyFunc := func() (bool, error) {
+		onu, err := lookupONUByPortID(ctx, driverV2, ponPort, onuID)
+		if err != nil {
+			// ONU not found - deletion successful
+			if strings.Contains(err.Error(), "not found") {
+				return true, nil
+			}
+			return false, nil // Other error, retry
+		}
+		// ONU still exists
+		return onu == nil, nil
+	}
+
+	err := verifyONUChange(ctx, verifyFunc, 3, 1*time.Second)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+	return nil
+}
