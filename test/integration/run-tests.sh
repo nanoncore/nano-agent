@@ -140,7 +140,7 @@ init_results "$RESULTS_FILE"
 
 # Command definitions: command_name:type (read/write)
 # Using simple array instead of associative array for bash 3.x compatibility
-READ_COMMANDS="olt-status onu-list onu-info diagnose port-list discover vlan-list vlan-get"
+READ_COMMANDS="olt-status onu-list onu-info diagnose port-list port-power discover vlan-list vlan-get"
 WRITE_COMMANDS="onu-provision onu-delete onu-suspend onu-resume onu-reboot onu-bulk-provision port-enable port-disable vlan-create vlan-delete"
 
 # Function to check if command is a write command

@@ -419,12 +419,30 @@ Examples:
 	RunE: runPortDisable,
 }
 
+var portPowerCmd = &cobra.Command{
+	Use:   "port-power",
+	Short: "Get optical power readings for a PON port",
+	Long: `Retrieve optical power readings from a PON port's SFP/GBIC module.
+
+Returns transmit power, receive power (if available), and module temperature.
+
+Examples:
+  # Get power readings for a PON port
+  nano-agent port-power --pon-port 0/0/1 \
+    --vendor huawei --address 192.168.1.1 --port 161 --protocol snmp --community public
+
+  # Output as JSON
+  nano-agent port-power --pon-port 0/0/1 \
+    --vendor huawei --address 192.168.1.1 --port 161 --protocol snmp --community public --json`,
+	RunE: runPortPower,
+}
+
 func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
 		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
 		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
-		portListCmd, portEnableCmd, portDisableCmd,
+		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd,
 	}
 	for _, cmd := range oltCommands {
 		cmd.Flags().StringVar(&oltVendor, "vendor", "", "OLT vendor (vsol, cdata, nokia, huawei, zte, etc.) [required]")
@@ -521,6 +539,10 @@ func init() {
 	portDisableCmd.Flags().BoolVar(&portForce, "force", false, "Confirm the disable operation")
 	portDisableCmd.MarkFlagRequired("pon-port")
 
+	// Port power flags
+	portPowerCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
+	portPowerCmd.MarkFlagRequired("pon-port")
+
 	// Add commands to root
 	rootCmd.AddCommand(discoverCmd)
 	rootCmd.AddCommand(diagnoseCmd)
@@ -537,6 +559,7 @@ func init() {
 	rootCmd.AddCommand(portListCmd)
 	rootCmd.AddCommand(portEnableCmd)
 	rootCmd.AddCommand(portDisableCmd)
+	rootCmd.AddCommand(portPowerCmd)
 }
 
 // createOLTDriver creates a driver connection to the OLT
@@ -2226,6 +2249,57 @@ func runPortDisable(cmd *cobra.Command, args []string) error {
 		data, _ := json.MarshalIndent(output, "", "  ")
 		fmt.Println(string(data))
 	}
+
+	return nil
+}
+
+func runPortPower(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("Port Power\n")
+		fmt.Printf("==========\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Port: %s\n\n", portPONPort)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting power readings... ")
+	}
+	reading, err := driverV2.GetPONPower(conn.ctx, portPONPort)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to get port power: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(reading, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Printf("Tx Power:     %.3f dBm\n", reading.TxPowerDBm)
+	if reading.RxPowerDBm != 0 {
+		fmt.Printf("Rx Power:     %.3f dBm\n", reading.RxPowerDBm)
+	}
+	if reading.Temperature != 0 {
+		fmt.Printf("Temperature: %.2f °C\n", reading.Temperature)
+	}
+	fmt.Printf("Timestamp:   %s\n", reading.Timestamp.Format("2006-01-02 15:04:05"))
 
 	return nil
 }
