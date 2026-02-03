@@ -481,12 +481,36 @@ func printRebootHeader(serial, ponPort string, onuID int) {
 	}
 }
 
+func printSuspendHeader(serial, ponPort string, onuID int) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU Suspend\n")
+	fmt.Printf("===========\n\n")
+	fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+	if serial != "" {
+		fmt.Printf("ONU: %s\n\n", serial)
+	} else {
+		fmt.Printf("ONU: %s ONU %d\n\n", ponPort, onuID)
+	}
+}
+
 // printDeleteSuccess prints deletion success message
 func printDeleteSuccess(ponPort string, onuID int) {
 	if outputJSON {
 		return
 	}
 	fmt.Printf("ONU deleted successfully\n")
+	fmt.Printf("  PON Port: %s\n", ponPort)
+	fmt.Printf("  ONU ID:   %d\n", onuID)
+}
+
+// printSuspendSuccess prints suspend success message
+func printSuspendSuccess(ponPort string, onuID int) {
+	if outputJSON {
+		return
+	}
+	fmt.Printf("ONU suspended successfully\n")
 	fmt.Printf("  PON Port: %s\n", ponPort)
 	fmt.Printf("  ONU ID:   %d\n", onuID)
 }
@@ -515,6 +539,24 @@ func executeDelete(ctx context.Context, driver types.Driver, serial, ponPort str
 			fmt.Printf("FAILED\n")
 		}
 		return fmt.Errorf("deletion failed: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+	return nil
+}
+
+// executeSuspend performs the ONU suspend action
+func executeSuspend(ctx context.Context, driver types.Driver, ponPort string, onuID int) error {
+	if !outputJSON {
+		fmt.Printf("Suspending ONU... ")
+	}
+	subscriberID := fmt.Sprintf("ont-%s-%d", ponPort, onuID)
+	if err := driver.SuspendSubscriber(ctx, subscriberID); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("suspend failed: %w", err)
 	}
 	if !outputJSON {
 		fmt.Printf("OK\n\n")
