@@ -90,6 +90,58 @@ log_info "Delete non-existent ONU returned code: $DELETE_CODE"
 log_info "Test 3 passed: Command handles non-existent ONU"
 
 # =============================================================================
+# Test 4: Delete existing ONU (integration)
+# =============================================================================
+log_info "Test 4: Delete existing ONU (integration)"
+
+if [[ "$VENDOR" != "vsol" ]]; then
+    log_warn "Test 4 skipped: only validated for vsol simulator"
+else
+    # Simulator defaults (override via env if needed)
+    TARGET_PON_PORT="${VSOL_TEST_PON_PORT:-0/1}"
+    TARGET_ONU_ID="${VSOL_TEST_ONU_ID:-5}"
+    TARGET_SERIAL="${VSOL_TEST_ONU_SERIAL:-FHTT01010005}"
+
+    log_info "Deleting ONU ${TARGET_PON_PORT} ${TARGET_ONU_ID} (serial: ${TARGET_SERIAL})"
+
+    set +e
+    DELETE_OUTPUT=$("$BINARY" onu-delete $CMD_ARGS \
+        --pon-port "$TARGET_PON_PORT" \
+        --onu-id "$TARGET_ONU_ID" \
+        --force 2>&1)
+    DELETE_CODE=$?
+    set -e
+
+    if [[ $DELETE_CODE -ne 0 ]]; then
+        log_error "Test 4 failed: delete command returned non-zero"
+        log_error "$DELETE_OUTPUT"
+        exit 1
+    fi
+
+    # Verify via SNMP (best-effort for simulator)
+    if command -v snmpwalk &> /dev/null && [[ -n "$COMMUNITY" ]]; then
+        # Allow a short delay for SNMP table to reflect deletion
+        FOUND="true"
+        for attempt in 1 2 3 4 5; do
+            SERIAL_TABLE=$(snmpwalk -v2c -c "$COMMUNITY" "$ADDRESS" \
+                1.3.6.1.4.1.37950.1.1.6.1.1.2.1.5 2>/dev/null || true)
+            if ! echo "$SERIAL_TABLE" | grep -q "$TARGET_SERIAL"; then
+                FOUND="false"
+                break
+            fi
+            sleep 1
+        done
+        if [[ "$FOUND" == "true" ]]; then
+            log_error "Test 4 failed: ONU serial still present after delete"
+            exit 1
+        fi
+        log_info "Test 4 passed: ONU serial not present in SNMP table"
+    else
+        log_warn "Test 4 skipped SNMP verification (snmpwalk unavailable or no community)"
+    fi
+fi
+
+# =============================================================================
 # Summary
 # =============================================================================
 log_success "All onu-delete tests passed for $VENDOR"

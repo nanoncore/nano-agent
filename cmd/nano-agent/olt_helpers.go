@@ -54,6 +54,12 @@ func connectToOLT(timeoutSecs int) (*oltConnection, error) {
 		config.Metadata["snmp_community"] = oltCommunity
 		config.Metadata["snmp_version"] = oltSNMPVersion
 	}
+	if strings.ToLower(oltProtocol) == "cli" {
+		config.Metadata["prefer_cli"] = "true"
+		if oltAddress == "127.0.0.1" || strings.EqualFold(oltAddress, "localhost") {
+			config.Metadata["disable_pager"] = "false"
+		}
+	}
 
 	if !outputJSON {
 		fmt.Printf("Connecting to OLT... ")
