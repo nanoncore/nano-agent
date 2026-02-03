@@ -64,6 +64,22 @@ Examples:
 	RunE: runVLANCreate,
 }
 
+var vlanGetCmd = &cobra.Command{
+	Use:   "vlan-get",
+	Short: "Get VLAN details by ID",
+	Long: `Get VLAN details for the specified VLAN ID.
+
+Examples:
+  # Get VLAN details
+  nano-agent vlan-get --vlan-id 702 \
+    --vendor vsol --address 10.0.0.254 --username admin --password admin
+
+  # Output as JSON
+  nano-agent vlan-get --vlan-id 702 \
+    --vendor vsol --address 10.0.0.254 --username admin --password admin --json`,
+	RunE: runVLANGet,
+}
+
 var vlanDeleteCmd = &cobra.Command{
 	Use:   "vlan-delete",
 	Short: "Delete a VLAN from the OLT",
@@ -99,7 +115,7 @@ Examples:
 func init() {
 	// Add VLAN commands with common OLT connection flags
 	vlanCommands := []*cobra.Command{
-		vlanListCmd, vlanCreateCmd, vlanDeleteCmd, servicePortAddCmd,
+		vlanListCmd, vlanGetCmd, vlanCreateCmd, vlanDeleteCmd, servicePortAddCmd,
 	}
 	for _, cmd := range vlanCommands {
 		cmd.Flags().StringVar(&oltVendor, "vendor", "", "OLT vendor [required]")
@@ -124,6 +140,10 @@ func init() {
 	vlanCreateCmd.Flags().StringVar(&vlanDescription, "description", "", "VLAN description")
 	vlanCreateCmd.MarkFlagRequired("vlan-id")
 
+	// vlan-get flags
+	vlanGetCmd.Flags().IntVar(&vlanID, "vlan-id", 0, "VLAN ID (1-4094) [required]")
+	vlanGetCmd.MarkFlagRequired("vlan-id")
+
 	// vlan-delete flags
 	vlanDeleteCmd.Flags().IntVar(&vlanID, "vlan-id", 0, "VLAN ID [required]")
 	vlanDeleteCmd.Flags().BoolVar(&vlanForce, "force", false, "Force deletion even with service ports")
@@ -143,6 +163,7 @@ func init() {
 
 	// Add to root command
 	rootCmd.AddCommand(vlanListCmd)
+	rootCmd.AddCommand(vlanGetCmd)
 	rootCmd.AddCommand(vlanCreateCmd)
 	rootCmd.AddCommand(vlanDeleteCmd)
 	rootCmd.AddCommand(servicePortAddCmd)
@@ -213,6 +234,73 @@ func runVLANList(cmd *cobra.Command, args []string) error {
 	w.Flush()
 
 	return nil
+}
+
+func runVLANGet(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("VLAN Details\n")
+		fmt.Printf("===========\n\n")
+		fmt.Printf("OLT: %s (%s)\n\n", oltAddress, oltVendor)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting VLAN... ")
+	}
+	vlan, err := driverV2.GetVLAN(conn.ctx, vlanID)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to get VLAN %d: %w", vlanID, err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+
+	if vlan == nil {
+		if outputJSON {
+			fmt.Println("null")
+		} else {
+			fmt.Printf("VLAN %d not found.\n", vlanID)
+		}
+		return nil
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(vlan, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "Field\tValue")
+	fmt.Fprintln(w, "-----\t-----")
+	fmt.Fprintf(w, "VLAN ID\t%d\n", vlan.ID)
+	fmt.Fprintf(w, "Name\t%s\n", fallbackString(vlan.Name, "-"))
+	fmt.Fprintf(w, "Type\t%s\n", fallbackString(vlan.Type, "static"))
+	fmt.Fprintf(w, "Service Ports\t%d\n", vlan.ServicePortCount)
+	fmt.Fprintf(w, "Description\t%s\n", fallbackString(vlan.Description, "-"))
+	w.Flush()
+
+	return nil
+}
+
+func fallbackString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 func runVLANCreate(cmd *cobra.Command, args []string) error {
