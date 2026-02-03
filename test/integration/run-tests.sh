@@ -141,7 +141,7 @@ init_results "$RESULTS_FILE"
 # Command definitions: command_name:type (read/write)
 # Using simple array instead of associative array for bash 3.x compatibility
 READ_COMMANDS="olt-status onu-list onu-info port-list discover"
-WRITE_COMMANDS="onu-provision onu-delete onu-suspend onu-reboot port-enable port-disable"
+WRITE_COMMANDS="onu-provision onu-delete onu-suspend onu-resume onu-reboot port-enable port-disable"
 
 # Function to check if command is a write command
 is_write_command() {

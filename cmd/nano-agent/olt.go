@@ -159,6 +159,13 @@ var (
 	onuSuspendONUID   int
 )
 
+// ONU resume flags
+var (
+	onuResumeSerial  string
+	onuResumePONPort string
+	onuResumeONUID   int
+)
+
 // ONU reboot flags
 var (
 	onuRebootSerial  string
@@ -277,6 +284,25 @@ Examples:
 	RunE: runONUSuspend,
 }
 
+var onuResumeCmd = &cobra.Command{
+	Use:   "onu-resume",
+	Short: "Resume an ONU (enable traffic)",
+	Long: `Resume a suspended ONU and restore traffic.
+
+This command re-enables traffic for the specified ONU. The ONU can be
+identified by serial number OR by PON port and ONU ID.
+
+Examples:
+  # Resume by serial number
+  nano-agent onu-resume --serial HWTC12345678 \
+    --vendor huawei --address 192.168.1.1
+
+  # Resume by PON port and ONU ID
+  nano-agent onu-resume --pon-port 0/0/1 --onu-id 101 \
+    --vendor huawei --address 192.168.1.1`,
+	RunE: runONUResume,
+}
+
 var onuRebootCmd = &cobra.Command{
 	Use:   "onu-reboot",
 	Short: "Reboot a specific ONU",
@@ -376,7 +402,7 @@ func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
 		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
-		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuRebootCmd, onuUpdateCmd,
+		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuRebootCmd, onuUpdateCmd,
 		portListCmd, portEnableCmd, portDisableCmd,
 	}
 	for _, cmd := range oltCommands {
@@ -439,6 +465,11 @@ func init() {
 	onuSuspendCmd.Flags().StringVar(&onuSuspendPONPort, "pon-port", "", "PON port (required if not using serial)")
 	onuSuspendCmd.Flags().IntVar(&onuSuspendONUID, "onu-id", 0, "ONU ID (required if not using serial)")
 
+	// ONU resume flags
+	onuResumeCmd.Flags().StringVar(&onuResumeSerial, "serial", "", "ONU serial number")
+	onuResumeCmd.Flags().StringVar(&onuResumePONPort, "pon-port", "", "PON port (required if not using serial)")
+	onuResumeCmd.Flags().IntVar(&onuResumeONUID, "onu-id", 0, "ONU ID (required if not using serial)")
+
 	// ONU reboot flags
 	onuRebootCmd.Flags().StringVar(&onuRebootSerial, "serial", "", "ONU serial number")
 	onuRebootCmd.Flags().StringVar(&onuRebootPONPort, "pon-port", "", "PON port (required if not using serial)")
@@ -474,6 +505,7 @@ func init() {
 	rootCmd.AddCommand(onuProvisionCmd)
 	rootCmd.AddCommand(onuDeleteCmd)
 	rootCmd.AddCommand(onuSuspendCmd)
+	rootCmd.AddCommand(onuResumeCmd)
 	rootCmd.AddCommand(onuRebootCmd)
 	rootCmd.AddCommand(onuUpdateCmd)
 	rootCmd.AddCommand(portListCmd)
@@ -1487,6 +1519,53 @@ func outputSuspendResult(serial, ponPort string, onuID int) error {
 		return nil
 	}
 	printSuspendSuccess(ponPort, onuID)
+	return nil
+}
+
+func runONUResume(cmd *cobra.Command, args []string) error {
+	if err := validateONUIdentifier(onuResumeSerial, onuResumePONPort, onuResumeONUID); err != nil {
+		return err
+	}
+
+	printResumeHeader(onuResumeSerial, onuResumePONPort, onuResumeONUID)
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	ponPort, onuID, err := resolveONU(conn.ctx, driverV2, onuResumeSerial, onuResumePONPort, onuResumeONUID)
+	if err != nil {
+		return err
+	}
+
+	if err := executeResume(conn.ctx, conn.driver, ponPort, onuID); err != nil {
+		return err
+	}
+
+	return outputResumeResult(onuResumeSerial, ponPort, onuID)
+}
+
+// outputResumeResult outputs resume results
+func outputResumeResult(serial, ponPort string, onuID int) error {
+	if outputJSON {
+		output := struct {
+			Status  string `json:"status"`
+			Serial  string `json:"serial,omitempty"`
+			PONPort string `json:"pon_port"`
+			ONUID   int    `json:"onu_id"`
+		}{Status: "resumed", Serial: serial, PONPort: ponPort, ONUID: onuID}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	printResumeSuccess(ponPort, onuID)
 	return nil
 }
 
