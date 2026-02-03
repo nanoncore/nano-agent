@@ -327,6 +327,24 @@ func (s *ExpectSession) ExecuteEnableWithPassword(password string) (string, erro
 			return output + output2, fmt.Errorf("failed to enter privileged mode after password: %w", err)
 		}
 		output = output + output2
+	} else if strings.ToLower(s.vendor) == "vsol" {
+		// V-SOL sometimes buffers the previous prompt, causing the expect to match
+		// the user prompt immediately before the password prompt is delivered.
+		// If we still appear to be in user mode, wait briefly for a late password prompt.
+		trimmed := strings.TrimSpace(output)
+		if strings.HasSuffix(trimmed, ">") {
+			output2, _, err := s.expecter.Expect(passwordRE, 2*time.Second)
+			if err == nil {
+				if err := s.expecter.Send(password + "\n"); err != nil {
+					return output + output2, fmt.Errorf("failed to send enable password: %w", err)
+				}
+				output3, _, err := s.expecter.Expect(s.promptRE, s.timeout)
+				if err != nil {
+					return output + output2 + output3, fmt.Errorf("failed to enter privileged mode after password: %w", err)
+				}
+				output = output + output2 + output3
+			}
+		}
 	}
 
 	return s.cleanOutput(output, "enable"), nil

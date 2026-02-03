@@ -27,5 +27,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Local development: uncomment the line below to use local nano-southbound
-// replace github.com/nanoncore/nano-southbound => ../nano-southbound
+// Local development: use a go.work file to reference local modules.

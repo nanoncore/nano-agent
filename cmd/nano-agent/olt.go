@@ -487,6 +487,14 @@ func createOLTDriver() (types.Driver, error) {
 		config.Metadata["snmp_community"] = oltCommunity
 		config.Metadata["snmp_version"] = oltSNMPVersion
 	}
+	if protocol == types.ProtocolCLI {
+		// Prefer CLI execution when explicitly using CLI protocol (avoid slow SNMP walks).
+		config.Metadata["prefer_cli"] = "true"
+		// Simulator CLI does not require pager disabling and can hang on terminal length.
+		if oltAddress == "127.0.0.1" || strings.EqualFold(oltAddress, "localhost") {
+			config.Metadata["disable_pager"] = "false"
+		}
+	}
 
 	driver, err := southbound.NewDriver(vendor, protocol, config)
 	if err != nil {
