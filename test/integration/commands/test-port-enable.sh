@@ -76,5 +76,31 @@ fi
 # =============================================================================
 # Summary
 # =============================================================================
+# =============================================================================
+# Test 3: Disable then enable port
+# =============================================================================
+PORT_TO_TOGGLE="${VSOL_PORT_ENABLE_PON_PORT:-0/3}"
+
+log_info "Test 3: Disable then enable port $PORT_TO_TOGGLE"
+
+DISABLE_OUTPUT=$("$BINARY" port-disable $CMD_ARGS --pon-port "$PORT_TO_TOGGLE" --force 2>&1) || {
+    log_error "Port disable failed: $DISABLE_OUTPUT"
+    exit 1
+}
+
+assert_contains "$DISABLE_OUTPUT" "disabled successfully" "Expected port disable success message"
+
+ENABLE_OUTPUT=$("$BINARY" port-enable $CMD_ARGS --pon-port "$PORT_TO_TOGGLE" 2>&1) || {
+    log_error "Port enable failed: $ENABLE_OUTPUT"
+    exit 1
+}
+
+assert_contains "$ENABLE_OUTPUT" "enabled successfully" "Expected port enable success message"
+
+log_info "Test 3 passed: Port toggled successfully"
+
+# =============================================================================
+# Summary
+# =============================================================================
 log_success "All port-enable tests passed for $VENDOR"
 exit 0
