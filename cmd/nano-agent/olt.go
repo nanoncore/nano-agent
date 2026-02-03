@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -166,6 +168,11 @@ var (
 	onuResumeONUID   int
 )
 
+// ONU bulk provision flags
+var (
+	onuBulkCSV string
+)
+
 // ONU reboot flags
 var (
 	onuRebootSerial  string
@@ -303,6 +310,20 @@ Examples:
 	RunE: runONUResume,
 }
 
+var onuBulkProvisionCmd = &cobra.Command{
+	Use:   "onu-bulk-provision",
+	Short: "Provision multiple ONUs from a CSV file",
+	Long: `Provision multiple ONUs in a single operation using a CSV file.
+
+CSV columns (header row required):
+  serial,pon_port,onu_id,vlan,line_profile,service_profile,bandwidth_up,bandwidth_down,priority
+
+Examples:
+  nano-agent onu-bulk-provision --csv bulk.csv \
+    --vendor vsol --address 10.0.0.254 --protocol cli --username admin --password admin`,
+	RunE: runONUBulkProvision,
+}
+
 var onuRebootCmd = &cobra.Command{
 	Use:   "onu-reboot",
 	Short: "Reboot a specific ONU",
@@ -402,7 +423,7 @@ func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
 		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
-		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuRebootCmd, onuUpdateCmd,
+		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
 		portListCmd, portEnableCmd, portDisableCmd,
 	}
 	for _, cmd := range oltCommands {
@@ -470,6 +491,10 @@ func init() {
 	onuResumeCmd.Flags().StringVar(&onuResumePONPort, "pon-port", "", "PON port (required if not using serial)")
 	onuResumeCmd.Flags().IntVar(&onuResumeONUID, "onu-id", 0, "ONU ID (required if not using serial)")
 
+	// ONU bulk provision flags
+	onuBulkProvisionCmd.Flags().StringVar(&onuBulkCSV, "csv", "", "CSV file with bulk provision operations [required]")
+	onuBulkProvisionCmd.MarkFlagRequired("csv")
+
 	// ONU reboot flags
 	onuRebootCmd.Flags().StringVar(&onuRebootSerial, "serial", "", "ONU serial number")
 	onuRebootCmd.Flags().StringVar(&onuRebootPONPort, "pon-port", "", "PON port (required if not using serial)")
@@ -506,6 +531,7 @@ func init() {
 	rootCmd.AddCommand(onuDeleteCmd)
 	rootCmd.AddCommand(onuSuspendCmd)
 	rootCmd.AddCommand(onuResumeCmd)
+	rootCmd.AddCommand(onuBulkProvisionCmd)
 	rootCmd.AddCommand(onuRebootCmd)
 	rootCmd.AddCommand(onuUpdateCmd)
 	rootCmd.AddCommand(portListCmd)
@@ -1569,6 +1595,73 @@ func outputResumeResult(serial, ponPort string, onuID int) error {
 	return nil
 }
 
+func runONUBulkProvision(cmd *cobra.Command, args []string) error {
+	if onuBulkCSV == "" {
+		return fmt.Errorf("--csv is required")
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	ops, err := loadBulkProvisionCSV(onuBulkCSV)
+	if err != nil {
+		return err
+	}
+
+	if err := assignBulkONUIDs(conn.ctx, driverV2, ops); err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("ONU Bulk Provision\n")
+		fmt.Printf("==================\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Operations: %d\n\n", len(ops))
+		fmt.Printf("Provisioning... ")
+	}
+
+	result, err := driverV2.BulkProvision(conn.ctx, ops)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("bulk provision failed: %w", err)
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Printf("OK\n\n")
+	fmt.Printf("Summary:\n")
+	fmt.Printf("  Succeeded: %d\n", result.Succeeded)
+	fmt.Printf("  Failed:    %d\n", result.Failed)
+	fmt.Printf("\nResults:\n")
+	for _, r := range result.Results {
+		status := "OK"
+		if !r.Success {
+			status = "FAILED"
+		}
+		fmt.Printf("  %s - %s %s onu %d", status, r.Serial, r.PONPort, r.ONUID)
+		if r.Error != "" {
+			fmt.Printf(" (%s)", r.Error)
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
 func runONUReboot(cmd *cobra.Command, args []string) error {
 	if err := validateONUIdentifier(onuRebootSerial, onuRebootPONPort, onuRebootONUID); err != nil {
 		return err
@@ -1613,6 +1706,127 @@ func outputRebootResult(serial, ponPort string, onuID int) error {
 		return nil
 	}
 	printRebootSuccess(ponPort, onuID)
+	return nil
+}
+
+func loadBulkProvisionCSV(path string) ([]types.BulkProvisionOp, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open csv: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read csv header: %w", err)
+	}
+
+	index := map[string]int{}
+	for i, h := range headers {
+		key := strings.ToLower(strings.TrimSpace(h))
+		index[key] = i
+	}
+
+	get := func(row []string, key string) string {
+		idx, ok := index[key]
+		if !ok || idx >= len(row) {
+			return ""
+		}
+		return strings.TrimSpace(row[idx])
+	}
+
+	var ops []types.BulkProvisionOp
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read csv row: %w", err)
+		}
+
+		serial := get(row, "serial")
+		ponPort := get(row, "pon_port")
+		if serial == "" || ponPort == "" {
+			return nil, fmt.Errorf("serial and pon_port are required")
+		}
+
+		onuID, _ := strconv.Atoi(get(row, "onu_id"))
+		vlan, _ := strconv.Atoi(get(row, "vlan"))
+		bwUp, _ := strconv.Atoi(get(row, "bandwidth_up"))
+		bwDown, _ := strconv.Atoi(get(row, "bandwidth_down"))
+		priority, _ := strconv.Atoi(get(row, "priority"))
+		lineProfile := get(row, "line_profile")
+		serviceProfile := get(row, "service_profile")
+
+		op := types.BulkProvisionOp{
+			Serial:  serial,
+			PONPort: ponPort,
+			ONUID:   onuID,
+			Profile: &types.ONUProfile{
+				LineProfile:    lineProfile,
+				ServiceProfile: serviceProfile,
+				BandwidthUp:    bwUp,
+				BandwidthDown:  bwDown,
+				VLAN:           vlan,
+				Priority:       priority,
+			},
+		}
+
+		ops = append(ops, op)
+	}
+
+	if len(ops) == 0 {
+		return nil, fmt.Errorf("no operations found in csv")
+	}
+
+	return ops, nil
+}
+
+func assignBulkONUIDs(ctx context.Context, driver types.DriverV2, ops []types.BulkProvisionOp) error {
+	usedByPort := map[string]map[int]struct{}{}
+
+	for _, op := range ops {
+		if _, ok := usedByPort[op.PONPort]; !ok {
+			usedByPort[op.PONPort] = map[int]struct{}{}
+		}
+		if op.ONUID > 0 {
+			usedByPort[op.PONPort][op.ONUID] = struct{}{}
+		}
+	}
+
+	for port := range usedByPort {
+		onus, err := driver.GetONUList(ctx, &types.ONUFilter{PONPort: port})
+		if err != nil {
+			return fmt.Errorf("failed to list ONUs on %s: %w", port, err)
+		}
+		for _, onu := range onus {
+			usedByPort[port][onu.ONUID] = struct{}{}
+		}
+	}
+
+	for i, op := range ops {
+		if op.ONUID > 0 {
+			continue
+		}
+		used := usedByPort[op.PONPort]
+		assigned := 0
+		for id := 1; id <= 128; id++ {
+			if _, exists := used[id]; !exists {
+				assigned = id
+				used[id] = struct{}{}
+				break
+			}
+		}
+		if assigned == 0 {
+			return fmt.Errorf("no available ONU IDs on port %s", op.PONPort)
+		}
+		ops[i].ONUID = assigned
+	}
+
 	return nil
 }
 
