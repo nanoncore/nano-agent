@@ -1278,6 +1278,16 @@ func runOLTHealthCheck(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("driver for vendor %s does not support OLT health check", oltVendor)
 	}
 
+	// Thresholds (best-practice defaults)
+	const (
+		tempWarnC  = 70.0
+		tempCritC  = 80.0
+		cpuWarnPct = 75.0
+		cpuCritPct = 90.0
+		memWarnPct = 80.0
+		memCritPct = 90.0
+	)
+
 	if !outputJSON {
 		fmt.Printf("Checking PON ports... ")
 	}
@@ -1293,11 +1303,59 @@ func runOLTHealthCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	var healthIssues []string
+	var warnings []string
+
 	for _, port := range ports {
 		status := strings.ToLower(port.OperState)
 		adminStatus := strings.ToLower(port.AdminState)
 		if adminStatus == "enable" && (status == "down" || status == "offline") {
 			healthIssues = append(healthIssues, fmt.Sprintf("%s is down while enabled", port.Port))
+		}
+	}
+
+	// Optional metrics from OLT status (may be missing for some vendors)
+	status, statusErr := driverV2.GetOLTStatus(ctx)
+	if statusErr == nil && status != nil {
+		if status.Temperature > 0 {
+			switch {
+			case status.Temperature >= tempCritC:
+				healthIssues = append(healthIssues, fmt.Sprintf("temperature %.1fC exceeds critical threshold %.1fC", status.Temperature, tempCritC))
+			case status.Temperature >= tempWarnC:
+				warnings = append(warnings, fmt.Sprintf("temperature %.1fC exceeds warning threshold %.1fC", status.Temperature, tempWarnC))
+			}
+		}
+		if status.CPUPercent > 0 {
+			switch {
+			case status.CPUPercent >= cpuCritPct:
+				healthIssues = append(healthIssues, fmt.Sprintf("cpu %.1f%% exceeds critical threshold %.1f%%", status.CPUPercent, cpuCritPct))
+			case status.CPUPercent >= cpuWarnPct:
+				warnings = append(warnings, fmt.Sprintf("cpu %.1f%% exceeds warning threshold %.1f%%", status.CPUPercent, cpuWarnPct))
+			}
+		}
+		if status.MemoryPercent > 0 {
+			switch {
+			case status.MemoryPercent >= memCritPct:
+				healthIssues = append(healthIssues, fmt.Sprintf("memory %.1f%% exceeds critical threshold %.1f%%", status.MemoryPercent, memCritPct))
+			case status.MemoryPercent >= memWarnPct:
+				warnings = append(warnings, fmt.Sprintf("memory %.1f%% exceeds warning threshold %.1f%%", status.MemoryPercent, memWarnPct))
+			}
+		}
+	}
+
+	// Optional alarms (if vendor supports CLI alarm retrieval)
+	if alarms, alarmsErr := driverV2.GetAlarms(ctx); alarmsErr == nil {
+		for _, alarm := range alarms {
+			sev := strings.ToLower(alarm.Severity)
+			msg := alarm.Message
+			if msg == "" {
+				msg = alarm.Type
+			}
+			switch sev {
+			case "critical", "major":
+				healthIssues = append(healthIssues, fmt.Sprintf("alarm %s: %s", sev, msg))
+			case "minor", "warning":
+				warnings = append(warnings, fmt.Sprintf("alarm %s: %s", sev, msg))
+			}
 		}
 	}
 
@@ -1312,7 +1370,16 @@ func runOLTHealthCheck(cmd *cobra.Command, args []string) error {
 			"healthy":    healthy,
 			"message":    message,
 			"issues":     healthIssues,
+			"warnings":   warnings,
 			"port_count": len(ports),
+			"thresholds": map[string]float64{
+				"temp_warn_c":  tempWarnC,
+				"temp_crit_c":  tempCritC,
+				"cpu_warn_pct": cpuWarnPct,
+				"cpu_crit_pct": cpuCritPct,
+				"mem_warn_pct": memWarnPct,
+				"mem_crit_pct": memCritPct,
+			},
 		}, "", "  ")
 		fmt.Println(string(output))
 		return nil
@@ -1324,6 +1391,12 @@ func runOLTHealthCheck(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Health: Issues detected\n")
 		for _, issue := range healthIssues {
 			fmt.Printf("  - %s\n", issue)
+		}
+	}
+	if len(warnings) > 0 {
+		fmt.Printf("Warnings:\n")
+		for _, warn := range warnings {
+			fmt.Printf("  - %s\n", warn)
 		}
 	}
 	fmt.Printf("PON ports checked: %d\n", len(ports))
