@@ -198,6 +198,12 @@ var (
 	portForce   bool
 )
 
+// Service port list flags
+var (
+	servicePortListPONPort string
+	servicePortListONUID   int
+)
+
 var onuInfoCmd = &cobra.Command{
 	Use:   "onu-info",
 	Short: "Get detailed information about a specific ONU",
@@ -437,12 +443,30 @@ Examples:
 	RunE: runPortPower,
 }
 
+var servicePortListCmd = &cobra.Command{
+	Use:   "service-port-list",
+	Short: "List service ports (VLAN to ONU mappings)",
+	Long: `List service ports configured on the OLT.
+
+Service ports map VLANs to specific ONUs and GEM ports.
+
+Examples:
+  # List all service ports
+  nano-agent service-port-list \
+    --vendor vsol --address 192.168.1.1 --port 22 --protocol cli --username admin --password admin
+
+  # Output as JSON
+  nano-agent service-port-list \
+    --vendor vsol --address 192.168.1.1 --port 22 --protocol cli --username admin --password admin --json`,
+	RunE: runServicePortList,
+}
+
 func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
 		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
 		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
-		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd,
+		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd, servicePortListCmd,
 	}
 	for _, cmd := range oltCommands {
 		cmd.Flags().StringVar(&oltVendor, "vendor", "", "OLT vendor (vsol, cdata, nokia, huawei, zte, etc.) [required]")
@@ -543,6 +567,10 @@ func init() {
 	portPowerCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
 	portPowerCmd.MarkFlagRequired("pon-port")
 
+	// Service port list flags
+	servicePortListCmd.Flags().StringVar(&servicePortListPONPort, "pon-port", "", "Filter by PON port (optional)")
+	servicePortListCmd.Flags().IntVar(&servicePortListONUID, "onu-id", 0, "Filter by ONU ID (optional)")
+
 	// Add commands to root
 	rootCmd.AddCommand(discoverCmd)
 	rootCmd.AddCommand(diagnoseCmd)
@@ -560,6 +588,7 @@ func init() {
 	rootCmd.AddCommand(portEnableCmd)
 	rootCmd.AddCommand(portDisableCmd)
 	rootCmd.AddCommand(portPowerCmd)
+	rootCmd.AddCommand(servicePortListCmd)
 }
 
 // createOLTDriver creates a driver connection to the OLT
@@ -2300,6 +2329,91 @@ func runPortPower(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Temperature: %.2f °C\n", reading.Temperature)
 	}
 	fmt.Printf("Timestamp:   %s\n", reading.Timestamp.Format("2006-01-02 15:04:05"))
+
+	return nil
+}
+
+func runServicePortList(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("Service Port List\n")
+		fmt.Printf("=================\n\n")
+		fmt.Printf("OLT: %s (%s)\n\n", oltAddress, oltVendor)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting service ports... ")
+	}
+	servicePorts, err := driverV2.ListServicePorts(conn.ctx)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to list service ports: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK (%d found)\n\n", len(servicePorts))
+	}
+
+	filtered := servicePorts
+	if servicePortListPONPort != "" || servicePortListONUID > 0 {
+		filtered = make([]types.ServicePort, 0, len(servicePorts))
+		for _, sp := range servicePorts {
+			if servicePortListPONPort != "" {
+				if sp.Interface != servicePortListPONPort &&
+					("0/"+sp.Interface) != servicePortListPONPort &&
+					!strings.HasSuffix(servicePortListPONPort, sp.Interface) {
+					continue
+				}
+			}
+			if servicePortListONUID > 0 && sp.ONTID != servicePortListONUID {
+				continue
+			}
+			filtered = append(filtered, sp)
+		}
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(filtered, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if len(filtered) == 0 {
+		fmt.Println("No service ports found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "Index\tVLAN\tPON\tONU\tGEM\tUser VLAN\tTag")
+	fmt.Fprintln(w, "-----\t----\t---\t---\t---\t---------\t---")
+	for _, sp := range filtered {
+		userVLAN := "-"
+		if sp.UserVLAN != 0 {
+			userVLAN = fmt.Sprintf("%d", sp.UserVLAN)
+		}
+		tag := sp.TagTransform
+		if tag == "" {
+			tag = "-"
+		}
+		gem := "-"
+		if sp.GemPort != 0 {
+			gem = fmt.Sprintf("%d", sp.GemPort)
+		}
+		fmt.Fprintf(w, "%d\t%d\t%s\t%d\t%s\t%s\t%s\n",
+			sp.Index, sp.VLAN, sp.Interface, sp.ONTID, gem, userVLAN, tag)
+	}
+	w.Flush()
 
 	return nil
 }
