@@ -82,12 +82,12 @@ assert_json_valid "$LIST_OUTPUT"
 
 MATCH_COUNT=$(echo "$LIST_OUTPUT" | jq "[.[] | select(.interface==\"$PON_PORT\" and .ont_id==$ONU_ID and .vlan==$VLAN_ID)] | length")
 if [[ "$MATCH_COUNT" -le 0 ]]; then
-    log_error "Expected service port entry in SNMP list"
+    log_error "Expected service port entry in CLI list"
     log_error "Value: $MATCH_COUNT"
     exit 1
 fi
 
-log_info "Test 2 passed: Service port found in SNMP list"
+log_info "Test 2 passed: Service port found in CLI list"
 
 # =============================================================================
 # Summary
