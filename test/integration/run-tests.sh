@@ -162,7 +162,7 @@ requires_cli() {
     # Only write operations (provision, delete, reboot), discover, and diagnostics require CLI
     if [[ "$vendor" == "vsol" ]]; then
         case "$cmd" in
-            provision|delete|reboot|configure|discover|diagnose|vlan-list|vlan-get|vlan-create|vlan-delete|service-port-list)
+            provision|delete|reboot|configure|discover|diagnose|vlan-list|vlan-get|vlan-create|vlan-delete)
                 return 0  # These still require CLI
                 ;;
             *)
@@ -171,7 +171,7 @@ requires_cli() {
         esac
     fi
     # Huawei discover requires CLI
-    if [[ "$vendor" == "huawei" && "$cmd" == "discover" ]]; then
+    if [[ "$vendor" == "huawei" && ( "$cmd" == "discover" || "$cmd" == "service-port-list" ) ]]; then
         return 0
     fi
     return 1
