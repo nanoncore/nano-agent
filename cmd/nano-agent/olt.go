@@ -112,6 +112,19 @@ Examples:
 	RunE: runOLTAlarms,
 }
 
+var oltHealthCheckCmd = &cobra.Command{
+	Use:   "olt-health-check",
+	Short: "Perform basic OLT health check",
+	Long: `Perform basic OLT health check.
+
+Checks OLT connectivity and evaluates PON port status.
+
+Examples:
+  nano-agent olt-health-check --vendor vsol --address 192.168.1.1 --protocol snmp --community public
+  nano-agent olt-health-check --vendor vsol --address 192.168.1.1 --protocol snmp --community public --json`,
+	RunE: runOLTHealthCheck,
+}
+
 var onuListCmd = &cobra.Command{
 	Use:   "onu-list",
 	Short: "List all provisioned ONUs on an OLT",
@@ -475,7 +488,7 @@ Examples:
 func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
-		discoverCmd, diagnoseCmd, oltStatusCmd, oltAlarmsCmd, onuListCmd,
+		discoverCmd, diagnoseCmd, oltStatusCmd, oltAlarmsCmd, oltHealthCheckCmd, onuListCmd,
 		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
 		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd, servicePortListCmd,
 	}
@@ -587,6 +600,7 @@ func init() {
 	rootCmd.AddCommand(diagnoseCmd)
 	rootCmd.AddCommand(oltStatusCmd)
 	rootCmd.AddCommand(oltAlarmsCmd)
+	rootCmd.AddCommand(oltHealthCheckCmd)
 	rootCmd.AddCommand(onuListCmd)
 	rootCmd.AddCommand(onuInfoCmd)
 	rootCmd.AddCommand(onuProvisionCmd)
@@ -1207,6 +1221,112 @@ func runOLTAlarms(cmd *cobra.Command, args []string) error {
 		)
 	}
 	w.Flush()
+
+	return nil
+}
+
+func runOLTHealthCheck(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("OLT Health Check\n")
+		fmt.Printf("================\n\n")
+	}
+
+	driver, err := createOLTDriver()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	config := &types.EquipmentConfig{
+		Name:          "cli-session",
+		Vendor:        types.Vendor(strings.ToLower(oltVendor)),
+		Address:       oltAddress,
+		Port:          oltPort,
+		Protocol:      types.Protocol(strings.ToLower(oltProtocol)),
+		Username:      oltUsername,
+		Password:      oltPassword,
+		SNMPCommunity: oltCommunity,
+		SNMPVersion:   oltSNMPVersion,
+		TLSEnabled:    oltTLS,
+		TLSSkipVerify: oltTLSSkipVe,
+		Timeout:       60 * time.Second,
+		Metadata:      make(map[string]string),
+	}
+	if oltProtocol == "snmp" {
+		config.Metadata["snmp_community"] = oltCommunity
+		config.Metadata["snmp_version"] = oltSNMPVersion
+	}
+
+	if !outputJSON {
+		fmt.Printf("Connecting to OLT... ")
+	}
+	if err := driver.Connect(ctx, config); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer driver.Disconnect(ctx)
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+
+	driverV2, ok := driver.(types.DriverV2)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support OLT health check", oltVendor)
+	}
+
+	if !outputJSON {
+		fmt.Printf("Checking PON ports... ")
+	}
+	ports, err := driverV2.ListPorts(ctx)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to list PON ports: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+
+	var healthIssues []string
+	for _, port := range ports {
+		status := strings.ToLower(port.OperState)
+		adminStatus := strings.ToLower(port.AdminState)
+		if adminStatus == "enable" && (status == "down" || status == "offline") {
+			healthIssues = append(healthIssues, fmt.Sprintf("%s is down while enabled", port.Port))
+		}
+	}
+
+	healthy := len(healthIssues) == 0
+	message := "OLT is healthy"
+	if !healthy {
+		message = strings.Join(healthIssues, "; ")
+	}
+
+	if outputJSON {
+		output, _ := json.MarshalIndent(map[string]interface{}{
+			"healthy":    healthy,
+			"message":    message,
+			"issues":     healthIssues,
+			"port_count": len(ports),
+		}, "", "  ")
+		fmt.Println(string(output))
+		return nil
+	}
+
+	if healthy {
+		fmt.Printf("Health: OK\n")
+	} else {
+		fmt.Printf("Health: Issues detected\n")
+		for _, issue := range healthIssues {
+			fmt.Printf("  - %s\n", issue)
+		}
+	}
+	fmt.Printf("PON ports checked: %d\n", len(ports))
 
 	return nil
 }
