@@ -69,15 +69,11 @@ assert_contains "$ADD_OUTPUT" "Service port added successfully" "Expected succes
 log_info "Test 1 passed: Service port added"
 
 # =============================================================================
-# Test 2: Verify via service-port-list (SNMP)
+# Test 2: Verify via service-port-list (CLI)
 # =============================================================================
-log_info "Test 2: Verify service port in SNMP list"
+log_info "Test 2: Verify service port in CLI list"
 
-SNMP_PORT="${VSOL_SNMP_PORT:-161}"
-SNMP_COMMUNITY="${COMMUNITY:-${SNMP_COMMUNITY:-public}}"
-SNMP_ARGS="--vendor $VENDOR --address $ADDRESS --port $SNMP_PORT --protocol snmp --community $SNMP_COMMUNITY"
-
-LIST_OUTPUT=$("$BINARY" service-port-list $SNMP_ARGS --json 2>&1) || {
+LIST_OUTPUT=$("$BINARY" service-port-list $CMD_ARGS --json 2>&1) || {
     log_error "Service port list failed: $LIST_OUTPUT"
     exit 1
 }
@@ -109,11 +105,11 @@ assert_contains "$DELETE_OUTPUT" "Service port deleted successfully" "Expected s
 log_info "Test 3 passed: Service port deleted"
 
 # =============================================================================
-# Test 4: Verify deletion via service-port-list (SNMP)
+# Test 4: Verify deletion via service-port-list (CLI)
 # =============================================================================
-log_info "Test 4: Verify service port removed from SNMP list"
+log_info "Test 4: Verify service port removed from CLI list"
 
-LIST_OUTPUT_AFTER=$("$BINARY" service-port-list $SNMP_ARGS --json 2>&1) || {
+LIST_OUTPUT_AFTER=$("$BINARY" service-port-list $CMD_ARGS --json 2>&1) || {
     log_error "Service port list failed: $LIST_OUTPUT_AFTER"
     exit 1
 }

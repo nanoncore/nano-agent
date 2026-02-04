@@ -183,7 +183,7 @@ is_unsupported_command() {
 
     if [[ "$vendor" == "huawei" ]]; then
         case "$cmd" in
-            olt-status|olt-alarms|olt-health-check|onu-list|onu-info|port-list|port-power|service-port-list|discover|vlan-list|vlan-get)
+            olt-status|olt-alarms|olt-health-check|onu-list|onu-info|port-list|port-power|service-port-list|discover|vlan-list|vlan-get|port-enable|port-disable|vlan-create|vlan-delete|service-port-add|service-port-delete)
                 return 0
                 ;;
             *)
