@@ -101,6 +101,17 @@ Examples:
 	RunE: runOLTStatus,
 }
 
+var oltAlarmsCmd = &cobra.Command{
+	Use:   "olt-alarms",
+	Short: "Show active OLT alarms",
+	Long: `Display active OLT alarms.
+
+Examples:
+  nano-agent olt-alarms --vendor vsol --address 192.168.1.1 --protocol cli --username admin --password admin
+  nano-agent olt-alarms --vendor vsol --address 192.168.1.1 --protocol cli --username admin --password admin --json`,
+	RunE: runOLTAlarms,
+}
+
 var onuListCmd = &cobra.Command{
 	Use:   "onu-list",
 	Short: "List all provisioned ONUs on an OLT",
@@ -464,7 +475,7 @@ Examples:
 func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
-		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
+		discoverCmd, diagnoseCmd, oltStatusCmd, oltAlarmsCmd, onuListCmd,
 		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
 		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd, servicePortListCmd,
 	}
@@ -575,6 +586,7 @@ func init() {
 	rootCmd.AddCommand(discoverCmd)
 	rootCmd.AddCommand(diagnoseCmd)
 	rootCmd.AddCommand(oltStatusCmd)
+	rootCmd.AddCommand(oltAlarmsCmd)
 	rootCmd.AddCommand(onuListCmd)
 	rootCmd.AddCommand(onuInfoCmd)
 	rootCmd.AddCommand(onuProvisionCmd)
@@ -1092,6 +1104,109 @@ func runOLTStatus(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("Last poll: %s\n", status.LastPoll.Format("2006-01-02 15:04:05"))
 	}
+
+	return nil
+}
+
+func runOLTAlarms(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("OLT Alarms\n")
+		fmt.Printf("==========\n\n")
+	}
+
+	driver, err := createOLTDriver()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	config := &types.EquipmentConfig{
+		Name:          "cli-session",
+		Vendor:        types.Vendor(strings.ToLower(oltVendor)),
+		Address:       oltAddress,
+		Port:          oltPort,
+		Protocol:      types.Protocol(strings.ToLower(oltProtocol)),
+		Username:      oltUsername,
+		Password:      oltPassword,
+		SNMPCommunity: oltCommunity,
+		SNMPVersion:   oltSNMPVersion,
+		TLSEnabled:    oltTLS,
+		TLSSkipVerify: oltTLSSkipVe,
+		Timeout:       60 * time.Second,
+		Metadata:      make(map[string]string),
+	}
+	if oltProtocol == "snmp" {
+		config.Metadata["snmp_community"] = oltCommunity
+		config.Metadata["snmp_version"] = oltSNMPVersion
+	}
+
+	if !outputJSON {
+		fmt.Printf("Connecting to OLT... ")
+	}
+	if err := driver.Connect(ctx, config); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer driver.Disconnect(ctx)
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+
+	driverV2, ok := driver.(types.DriverV2)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support OLT alarms", oltVendor)
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting OLT alarms... ")
+	}
+	alarms, err := driverV2.GetAlarms(ctx)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to get alarms: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+
+	if outputJSON {
+		output, _ := json.MarshalIndent(alarms, "", "  ")
+		fmt.Println(string(output))
+		return nil
+	}
+
+	if len(alarms) == 0 {
+		fmt.Printf("No active alarms.\n")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSeverity\tType\tSource\tSource ID\tMessage\tRaised At")
+	fmt.Fprintln(w, "--\t--------\t----\t------\t---------\t-------\t---------")
+	for _, alarm := range alarms {
+		raisedAt := ""
+		if !alarm.RaisedAt.IsZero() {
+			raisedAt = alarm.RaisedAt.Format("2006-01-02 15:04:05")
+		}
+		fmt.Fprintf(
+			w,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			alarm.ID,
+			alarm.Severity,
+			alarm.Type,
+			alarm.Source,
+			alarm.SourceID,
+			alarm.Message,
+			raisedAt,
+		)
+	}
+	w.Flush()
 
 	return nil
 }

@@ -140,7 +140,7 @@ init_results "$RESULTS_FILE"
 
 # Command definitions: command_name:type (read/write)
 # Using simple array instead of associative array for bash 3.x compatibility
-READ_COMMANDS="olt-status onu-list onu-info diagnose port-list port-power service-port-list discover vlan-list vlan-get"
+READ_COMMANDS="olt-status olt-alarms onu-list onu-info diagnose port-list port-power service-port-list discover vlan-list vlan-get"
 WRITE_COMMANDS="onu-provision onu-delete onu-suspend onu-resume onu-reboot onu-bulk-provision port-enable port-disable vlan-create vlan-delete service-port-add service-port-delete"
 
 # Function to check if command is a write command
@@ -162,7 +162,7 @@ requires_cli() {
     # Only write operations (provision, delete, reboot), discover, and diagnostics require CLI
     if [[ "$vendor" == "vsol" ]]; then
         case "$cmd" in
-            provision|delete|reboot|configure|discover|diagnose|vlan-list|vlan-get|vlan-create|vlan-delete|service-port-add|service-port-delete)
+            provision|delete|reboot|configure|discover|diagnose|vlan-list|vlan-get|vlan-create|vlan-delete|service-port-add|service-port-delete|olt-alarms)
                 return 0  # These still require CLI
                 ;;
             *)
