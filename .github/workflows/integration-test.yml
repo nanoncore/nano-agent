@@ -37,10 +37,37 @@ on:
 env:
   GO_VERSION: '1.24'
   GOPRIVATE: 'github.com/nanoncore/*'
-  # Default to GHCR image, can be overridden
+  # Default to GHCR image, can be overridden by locally built image
   OLT_SIMULATOR_IMAGE: ghcr.io/marksonmarcolino/olt-simulator:latest
 
 jobs:
+  # ==========================================================================
+  # Check OLT Simulator image availability
+  # ==========================================================================
+  check-simulator-image:
+    name: Check OLT Simulator Image
+    runs-on: ubuntu-latest
+    outputs:
+      simulator_available: ${{ steps.check.outputs.simulator_available }}
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Check OLT Simulator image availability
+        id: check
+        run: |
+          echo "Checking OLT Simulator image availability..."
+          if docker pull ${{ env.OLT_SIMULATOR_IMAGE }}; then
+            echo "simulator_available=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::Failed to pull OLT simulator from GHCR"
+            echo "simulator_available=false" >> $GITHUB_OUTPUT
+          fi
+
   # ==========================================================================
   # Build nano-agent
   # ==========================================================================
@@ -97,12 +124,13 @@ jobs:
           retention-days: 1
 
   # ==========================================================================
-  # Build OLT Simulator (only if requested or GHCR image unavailable)
+  # Build OLT Simulator
   # ==========================================================================
   build-simulator:
     name: Build OLT Simulator
     runs-on: ubuntu-latest
-    if: ${{ github.event.inputs.build_simulator == 'true' }}
+    needs: [check-simulator-image]
+    if: ${{ github.event.inputs.build_simulator == 'true' || needs.check-simulator-image.outputs.simulator_available == 'false' }}
     steps:
       - name: Checkout olt-simulator
         uses: actions/checkout@v4
@@ -139,9 +167,10 @@ jobs:
   # ==========================================================================
   integration-test:
     name: Test (${{ matrix.vendor }})
-    needs: [build]
+    needs: [build, check-simulator-image, build-simulator]
     runs-on: ubuntu-latest
-    continue-on-error: true  # Don't block PR merge if simulator unavailable
+    continue-on-error: false
+    if: ${{ always() && needs.build.result == 'success' && needs.check-simulator-image.result == 'success' && (needs.build-simulator.result == 'success' || needs.build-simulator.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -160,27 +189,28 @@ jobs:
       - name: Make binary executable
         run: chmod +x ./nano-agent
 
-      # Option 1: Load locally built image (if build_simulator was true)
+      # Option 1: Load locally built image (if built)
       - name: Download OLT Simulator image (if built)
-        if: ${{ github.event.inputs.build_simulator == 'true' }}
+        if: ${{ needs.build-simulator.result == 'success' }}
         uses: actions/download-artifact@v4
         with:
           name: olt-simulator-image
           path: /tmp
-        continue-on-error: true
 
       - name: Load OLT Simulator image (if built)
-        if: ${{ github.event.inputs.build_simulator == 'true' }}
+        if: ${{ needs.build-simulator.result == 'success' }}
         run: |
           if [[ -f /tmp/olt-simulator.tar ]]; then
             docker load -i /tmp/olt-simulator.tar
             echo "OLT_SIMULATOR_IMAGE=olt-simulator:ci" >> $GITHUB_ENV
+          else
+            echo "::error::OLT Simulator image artifact missing. Build job ran but no image was produced."
+            exit 1
           fi
-        continue-on-error: true
 
       # Option 2: Pull from GHCR (default)
       - name: Login to GitHub Container Registry
-        if: ${{ github.event.inputs.build_simulator != 'true' }}
+        if: ${{ needs.build-simulator.result != 'success' }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -188,26 +218,15 @@ jobs:
           password: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Pull OLT Simulator from GHCR
-        id: pull_simulator
-        if: ${{ github.event.inputs.build_simulator != 'true' }}
+        if: ${{ needs.build-simulator.result != 'success' }}
         run: |
           echo "Pulling OLT Simulator image from GHCR..."
-          if docker pull ${{ env.OLT_SIMULATOR_IMAGE }}; then
-            echo "SIMULATOR_AVAILABLE=true" >> $GITHUB_ENV
-          else
-            echo "::warning::Failed to pull OLT simulator from GHCR"
-            echo "SIMULATOR_AVAILABLE=false" >> $GITHUB_ENV
+          if ! docker pull ${{ env.OLT_SIMULATOR_IMAGE }}; then
+            echo "::error::OLT Simulator not available. Ensure the GHCR image is accessible or trigger with build_simulator=true."
+            exit 1
           fi
 
-      - name: Skip tests if simulator unavailable
-        if: env.SIMULATOR_AVAILABLE == 'false'
-        run: |
-          echo "::notice::OLT Simulator not available. Skipping integration tests."
-          echo "::notice::To run integration tests, ensure the GHCR image is accessible or trigger with build_simulator=true"
-          echo "SKIP_TESTS=true" >> $GITHUB_ENV
-
       - name: Start OLT Simulator
-        if: env.SKIP_TESTS != 'true'
         run: |
           cd test/integration
 
@@ -222,7 +241,6 @@ jobs:
           docker ps
 
       - name: Wait for OLT Simulator health
-        if: env.SKIP_TESTS != 'true'
         run: |
           echo "Waiting for OLT Simulator to be healthy..."
           HEALTH_PORT=${{ matrix.vendor == 'vsol' && '8888' || '8889' }}
@@ -241,7 +259,6 @@ jobs:
           exit 1
 
       - name: Make test scripts executable
-        if: env.SKIP_TESTS != 'true'
         run: |
           chmod +x test/integration/run-tests.sh
           chmod +x test/integration/lib/*.sh
@@ -249,7 +266,6 @@ jobs:
           chmod +x test/integration/reports/*.sh 2>/dev/null || true
 
       - name: Run integration tests
-        if: env.SKIP_TESTS != 'true'
         id: tests
         env:
           NANO_AGENT_BINARY: ${{ github.workspace }}/nano-agent
@@ -270,7 +286,7 @@ jobs:
             ${{ github.event.inputs.skip_write == 'true' && '--skip-write' || '' }}
 
       - name: Generate test report
-        if: always() && env.SKIP_TESTS != 'true'
+        if: always()
         run: |
           cd test/integration
           if [[ -x ./reports/generate-report.sh ]]; then
@@ -278,7 +294,7 @@ jobs:
           fi
 
       - name: Upload test results
-        if: always() && env.SKIP_TESTS != 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results-${{ matrix.vendor }}
@@ -286,7 +302,7 @@ jobs:
           retention-days: 30
 
       - name: Show OLT Simulator logs on failure
-        if: failure() && env.SKIP_TESTS != 'true'
+        if: failure()
         run: |
           echo "=== Docker Containers ==="
           docker ps -a
@@ -295,7 +311,7 @@ jobs:
           docker logs olt-simulator-${{ matrix.vendor }}-ci 2>&1 | tail -100
 
       - name: Stop OLT Simulator
-        if: always() && env.SKIP_TESTS != 'true'
+        if: always()
         run: |
           cd test/integration
           docker compose -f docker-compose.ci.yml down -v

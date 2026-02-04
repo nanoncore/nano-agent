@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Test: port-disable command
-# Note: This is a write operation
+# Test: vlan-create command
 # =============================================================================
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
@@ -35,72 +34,64 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-log_info "Testing port-disable for vendor: $VENDOR (protocol: $PROTOCOL)"
+log_info "Testing vlan-create for vendor: $VENDOR (protocol: $PROTOCOL)"
 
-# Build CLI command arguments
+# Build command arguments
 CMD_ARGS="--vendor $VENDOR --address $ADDRESS --port $PORT --protocol $PROTOCOL"
 if [[ -n "$USERNAME" ]]; then
     CMD_ARGS="$CMD_ARGS --username $USERNAME --password $PASSWORD"
 fi
-if [[ -n "$COMMUNITY" ]]; then
-    CMD_ARGS="$CMD_ARGS --community $COMMUNITY"
-fi
+
+VLAN_ID="${VSOL_VLAN_CREATE_ID:-706}"
+VLAN_NAME="${VSOL_VLAN_CREATE_NAME:-vlan706}"
+VLAN_DESC="${VSOL_VLAN_CREATE_DESC:-test vlan 706}"
 
 # =============================================================================
-# Test 1: Help output
+# Test 1: Create VLAN
 # =============================================================================
-log_info "Test 1: Verify help output"
+log_info "Test 1: Create VLAN"
 
-HELP_OUTPUT=$("$BINARY" port-disable --help 2>&1) || true
+OUTPUT=$("$BINARY" vlan-create $CMD_ARGS --vlan-id "$VLAN_ID" --name "$VLAN_NAME" --description "$VLAN_DESC" 2>&1) || {
+    log_error "Command failed with output: $OUTPUT"
+    exit 1
+}
 
-assert_contains "$HELP_OUTPUT" "port" "Help should mention port parameter"
+assert_contains "$OUTPUT" "created successfully" "Expected create success message"
 
-log_info "Test 1 passed: Help output is correct"
+log_info "Test 1 passed: VLAN created"
 
 # =============================================================================
-# Test 2: Missing port parameter
+# Test 2: Get VLAN (JSON)
 # =============================================================================
-log_info "Test 2: Missing port should fail"
+log_info "Test 2: Get VLAN (JSON)"
 
-set +e
-ERROR_OUTPUT=$("$BINARY" port-disable $CMD_ARGS 2>&1)
-EXIT_CODE=$?
-set -e
+GET_OUTPUT=$("$BINARY" vlan-get $CMD_ARGS --vlan-id "$VLAN_ID" --json 2>&1) || {
+    log_error "VLAN get failed: $GET_OUTPUT"
+    exit 1
+}
 
-if [[ $EXIT_CODE -ne 0 ]]; then
-    log_info "Test 2 passed: Command correctly fails without port"
-else
-    log_warn "Test 2: Command did not fail as expected"
-fi
+assert_json_valid "$GET_OUTPUT"
+ID_VALUE=$(echo "$GET_OUTPUT" | jq -r '.id // .ID // empty')
+assert_equals "$VLAN_ID" "$ID_VALUE" "VLAN ID should match"
+
+log_info "Test 2 passed: VLAN get works"
+
+# =============================================================================
+# Test 3: Delete VLAN
+# =============================================================================
+log_info "Test 3: Delete VLAN"
+
+DELETE_OUTPUT=$("$BINARY" vlan-delete $CMD_ARGS --vlan-id "$VLAN_ID" --force 2>&1) || {
+    log_error "VLAN delete failed: $DELETE_OUTPUT"
+    exit 1
+}
+
+assert_contains "$DELETE_OUTPUT" "deleted" "Expected delete success message"
+
+log_info "Test 3 passed: VLAN deleted"
 
 # =============================================================================
 # Summary
 # =============================================================================
-# =============================================================================
-# Test 3: Disable then enable port
-# =============================================================================
-PORT_TO_TOGGLE="${VSOL_PORT_DISABLE_PON_PORT:-0/4}"
-
-log_info "Test 3: Disable then enable port $PORT_TO_TOGGLE"
-
-DISABLE_OUTPUT=$("$BINARY" port-disable $CMD_ARGS --pon-port "$PORT_TO_TOGGLE" --force 2>&1) || {
-    log_error "Port disable failed: $DISABLE_OUTPUT"
-    exit 1
-}
-
-assert_contains "$DISABLE_OUTPUT" "disabled successfully" "Expected port disable success message"
-
-ENABLE_OUTPUT=$("$BINARY" port-enable $CMD_ARGS --pon-port "$PORT_TO_TOGGLE" 2>&1) || {
-    log_error "Port enable failed: $ENABLE_OUTPUT"
-    exit 1
-}
-
-assert_contains "$ENABLE_OUTPUT" "enabled successfully" "Expected port enable success message"
-
-log_info "Test 3 passed: Port toggled successfully"
-
-# =============================================================================
-# Summary
-# =============================================================================
-log_success "All port-disable tests passed for $VENDOR"
+log_success "All vlan-create tests passed for $VENDOR"
 exit 0

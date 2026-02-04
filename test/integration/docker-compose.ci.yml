@@ -12,9 +12,9 @@ services:
   olt-simulator-vsol:
     image: ${OLT_SIMULATOR_IMAGE:-ghcr.io/nanoncore/olt-simulator:latest}
     container_name: olt-simulator-vsol-ci
-    command: ["python", "-m", "olt_simulator", "--config", "/app/config/multi-olt.yaml"]
     environment:
       OLT_LOG_LEVEL: INFO
+      OLT_MULTI_OLT_CONFIG: /app/config/multi-olt.yaml
       PYTHONUNBUFFERED: "1"
     ports:
       - "8888:8080"     # REST API
@@ -38,9 +38,9 @@ services:
   olt-simulator-huawei:
     image: ${OLT_SIMULATOR_IMAGE:-ghcr.io/nanoncore/olt-simulator:latest}
     container_name: olt-simulator-huawei-ci
-    command: ["python", "-m", "olt_simulator", "--config", "/app/config/multi-olt.yaml"]
     environment:
       OLT_LOG_LEVEL: INFO
+      OLT_MULTI_OLT_CONFIG: /app/config/multi-olt.yaml
       PYTHONUNBUFFERED: "1"
     ports:
       - "8889:8080"     # REST API (different port to avoid conflict)

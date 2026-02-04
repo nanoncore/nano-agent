@@ -140,23 +140,34 @@ func (e *Executor) handleOLTStatus(ctx context.Context, driver cli.CLIDriver, cm
 func (e *Executor) handleOLTAlarms(ctx context.Context, driver cli.CLIDriver, cmd agent.PendingCommand) (map[string]interface{}, error) {
 	vendor := driver.Vendor()
 
-	var alarmCmd string
+	var alarms []map[string]interface{}
 	switch vendor {
-	case "huawei":
-		alarmCmd = "display alarm active"
 	case "vsol":
-		alarmCmd = "show alarm active"
+		if _, err := driver.Execute(ctx, "configure terminal"); err != nil {
+			return nil, fmt.Errorf("failed to enter config mode: %w", err)
+		}
+		defer driver.Execute(ctx, "end")
+
+		_, _ = driver.Execute(ctx, "show alarm summary")
+		oamlogOutput, err := driver.Execute(ctx, "show alarm oamlog")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get OLT alarm log: %w", err)
+		}
+
+		alarms = parseVSolOamlog(oamlogOutput)
+	case "huawei":
+		output, err := driver.Execute(ctx, "display alarm active")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get OLT alarms: %w", err)
+		}
+		alarms = parseOLTAlarms(vendor, output)
 	default:
-		alarmCmd = "display alarm active"
+		output, err := driver.Execute(ctx, "display alarm active")
+		if err != nil {
+			return nil, fmt.Errorf("failed to get OLT alarms: %w", err)
+		}
+		alarms = parseOLTAlarms(vendor, output)
 	}
-
-	output, err := driver.Execute(ctx, alarmCmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get OLT alarms: %w", err)
-	}
-
-	// Parse alarm output into structured format
-	alarms := parseOLTAlarms(vendor, output)
 
 	return map[string]interface{}{
 		"alarms": alarms,
@@ -399,6 +410,73 @@ func parseOLTAlarms(vendor, output string) []map[string]interface{} {
 	default:
 		return parseGenericAlarms(output)
 	}
+}
+
+// parseVSolOamlog parses V-SOL alarm/event log output into alarm records.
+func parseVSolOamlog(output string) []map[string]interface{} {
+	alarms := []map[string]interface{}{}
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Example:
+		// 2026/02/04 10:46:15   ONU Online               PON 0/2 ONU 1 sn GPON00929978
+		// 2026/02/04 10:34:24 major       User Login               User admin logged in from 10.0.0.254 on vty
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+
+		dateStr := fields[0]
+		timeStr := fields[1]
+		timestamp, err := time.Parse("2006/01/02 15:04:05", fmt.Sprintf("%s %s", dateStr, timeStr))
+		if err != nil {
+			continue
+		}
+
+		rest := strings.TrimSpace(line[len(fields[0])+len(fields[1])+2:])
+		columns := regexp.MustCompile(`\s{2,}`).Split(rest, -1)
+
+		severity := "unknown"
+		eventName := ""
+		message := ""
+
+		if len(columns) == 1 {
+			eventName = columns[0]
+		} else if len(columns) == 2 {
+			eventName = columns[0]
+			message = columns[1]
+		} else if len(columns) >= 3 {
+			severity = strings.ToLower(columns[0])
+			eventName = columns[1]
+			message = strings.Join(columns[2:], " ")
+		}
+
+		if eventName == "" {
+			continue
+		}
+
+		alarm := map[string]interface{}{
+			"id":        fmt.Sprintf("%d", len(alarms)+1),
+			"severity":  strings.ToLower(severity),
+			"type":      strings.ToLower(strings.ReplaceAll(eventName, " ", "_")),
+			"source":    "system",
+			"message":   strings.TrimSpace(message),
+			"timestamp": timestamp.Format(time.RFC3339),
+		}
+
+		if message == "" {
+			alarm["message"] = strings.TrimSpace(eventName)
+		}
+
+		alarms = append(alarms, alarm)
+	}
+
+	return alarms
 }
 
 // parseHuaweiAlarms parses Huawei alarm table format.

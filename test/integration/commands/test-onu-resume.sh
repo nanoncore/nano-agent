@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Test: onu-reboot command
-# Note: This is a write operation
+# Test: onu-resume command
+# Note: This is a write operation that modifies OLT state
 # =============================================================================
 set -euo pipefail
 
@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-log_info "Testing onu-reboot for vendor: $VENDOR (protocol: $PROTOCOL)"
+log_info "Testing onu-resume for vendor: $VENDOR (protocol: $PROTOCOL)"
 
 # Build CLI command arguments
 CMD_ARGS="--vendor $VENDOR --address $ADDRESS --port $PORT --protocol $PROTOCOL"
@@ -51,7 +51,7 @@ fi
 # =============================================================================
 log_info "Test 1: Verify help output"
 
-HELP_OUTPUT=$("$BINARY" onu-reboot --help 2>&1) || true
+HELP_OUTPUT=$("$BINARY" onu-resume --help 2>&1) || true
 
 assert_contains "$HELP_OUTPUT" "serial" "Help should mention serial parameter"
 
@@ -60,43 +60,69 @@ log_info "Test 1 passed: Help output is correct"
 # =============================================================================
 # Test 2: Missing required parameters
 # =============================================================================
-log_info "Test 2: Missing serial should fail"
+log_info "Test 2: Missing required parameters should fail"
 
 set +e
-ERROR_OUTPUT=$("$BINARY" onu-reboot $CMD_ARGS 2>&1)
+ERROR_OUTPUT=$("$BINARY" onu-resume $CMD_ARGS 2>&1)
 EXIT_CODE=$?
 set -e
 
 if [[ $EXIT_CODE -ne 0 ]]; then
-log_info "Test 2 passed: Command correctly fails without serial"
+    log_info "Test 2 passed: Command correctly fails without serial"
 else
     log_warn "Test 2: Command did not fail as expected"
 fi
 
 # =============================================================================
-# Test 3: Reboot existing ONU (integration)
+# Test 3: Resume existing ONU (integration)
 # =============================================================================
-log_info "Test 3: Reboot existing ONU (integration)"
+log_info "Test 3: Resume existing ONU (integration)"
 
 if [[ "$VENDOR" != "vsol" ]]; then
     log_warn "Test 3 skipped: only validated for vsol simulator"
 else
-    TARGET_PON_PORT="${VSOL_REBOOT_PON_PORT:-0/1}"
-    TARGET_ONU_ID="${VSOL_REBOOT_ONU_ID:-2}"
-    TARGET_SERIAL="${VSOL_REBOOT_ONU_SERIAL:-FHTT01010002}"
+    TARGET_PON_PORT="${VSOL_RESUME_PON_PORT:-0/1}"
+    TARGET_ONU_ID="${VSOL_RESUME_ONU_ID:-2}"
+    TARGET_SERIAL="${VSOL_RESUME_ONU_SERIAL:-FHTT01010002}"
 
-    log_info "Rebooting ONU ${TARGET_PON_PORT} ${TARGET_ONU_ID} (serial: ${TARGET_SERIAL})"
+    log_info "Resuming ONU ${TARGET_PON_PORT} ${TARGET_ONU_ID} (serial: ${TARGET_SERIAL})"
 
+    # Ensure ONU is suspended before resuming (best-effort setup)
     set +e
-    REBOOT_OUTPUT=$("$BINARY" onu-reboot $CMD_ARGS \
+    "$BINARY" onu-suspend $CMD_ARGS \
         --pon-port "$TARGET_PON_PORT" \
-        --onu-id "$TARGET_ONU_ID" 2>&1)
-    REBOOT_CODE=$?
+        --onu-id "$TARGET_ONU_ID" >/dev/null 2>&1
     set -e
 
-    if [[ $REBOOT_CODE -ne 0 ]]; then
-        log_error "Test 3 failed: reboot command returned non-zero"
-        log_error "$REBOOT_OUTPUT"
+    # Verify suspended via SNMP (best-effort for simulator)
+    if command -v snmpwalk &> /dev/null && [[ -n "$COMMUNITY" ]]; then
+        if [[ "$TARGET_PON_PORT" =~ ^0/([0-9]+)$ ]]; then
+            PON_INDEX="${BASH_REMATCH[1]}"
+            RX_OID="1.3.6.1.4.1.37950.1.1.6.1.1.3.1.7.${PON_INDEX}.${TARGET_ONU_ID}"
+            for attempt in 1 2 3 4 5; do
+                RX_POWER=$(snmpwalk -v2c -c "$COMMUNITY" "$ADDRESS" "$RX_OID" 2>/dev/null || true)
+                if echo "$RX_POWER" | grep -q "N/A"; then
+                    break
+                fi
+                sleep 1
+            done
+        else
+            log_warn "Test 3 skipped SNMP pre-check (unsupported PON port format)"
+        fi
+    else
+        log_warn "Test 3 skipped SNMP pre-check (snmpwalk unavailable or no community)"
+    fi
+
+    set +e
+    RESUME_OUTPUT=$("$BINARY" onu-resume $CMD_ARGS \
+        --pon-port "$TARGET_PON_PORT" \
+        --onu-id "$TARGET_ONU_ID" 2>&1)
+    RESUME_CODE=$?
+    set -e
+
+    if [[ $RESUME_CODE -ne 0 ]]; then
+        log_error "Test 3 failed: resume command returned non-zero"
+        log_error "$RESUME_OUTPUT"
         exit 1
     fi
 
@@ -105,37 +131,21 @@ else
         if [[ "$TARGET_PON_PORT" =~ ^0/([0-9]+)$ ]]; then
             PON_INDEX="${BASH_REMATCH[1]}"
             RX_OID="1.3.6.1.4.1.37950.1.1.6.1.1.3.1.7.${PON_INDEX}.${TARGET_ONU_ID}"
-
-            # Expect rx power to go N/A during deactivate phase
-            SEEN_NA="false"
-            for attempt in 1 2 3 4 5; do
-                RX_POWER=$(snmpwalk -v2c -c "$COMMUNITY" "$ADDRESS" "$RX_OID" 2>/dev/null || true)
-                if echo "$RX_POWER" | grep -q "N/A"; then
-                    SEEN_NA="true"
-                    break
-                fi
-                sleep 1
-            done
-            if [[ "$SEEN_NA" != "true" ]]; then
-                log_warn "Test 3 warning: rx power did not become N/A during reboot"
-            fi
-
-            # Expect rx power to return numeric after activate phase
-            RESTORED="false"
+            VERIFIED="false"
             for attempt in 1 2 3 4 5; do
                 RX_POWER=$(snmpwalk -v2c -c "$COMMUNITY" "$ADDRESS" "$RX_OID" 2>/dev/null || true)
                 if ! echo "$RX_POWER" | grep -q "N/A"; then
-                    RESTORED="true"
+                    VERIFIED="true"
                     break
                 fi
                 sleep 1
             done
-            if [[ "$RESTORED" != "true" ]]; then
-                log_error "Test 3 failed: ONU rx power did not restore after reboot"
+            if [[ "$VERIFIED" != "true" ]]; then
+                log_error "Test 3 failed: ONU rx power still N/A after resume"
                 log_error "$RX_POWER"
                 exit 1
             fi
-            log_info "Test 3 passed: ONU rx power restored after reboot"
+            log_info "Test 3 passed: ONU rx power restored (not N/A)"
         else
             log_warn "Test 3 skipped SNMP verification (unsupported PON port format)"
         fi
@@ -147,5 +157,5 @@ fi
 # =============================================================================
 # Summary
 # =============================================================================
-log_success "All onu-reboot tests passed for $VENDOR"
+log_success "All onu-resume tests passed for $VENDOR"
 exit 0

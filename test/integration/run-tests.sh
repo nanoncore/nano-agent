@@ -140,8 +140,8 @@ init_results "$RESULTS_FILE"
 
 # Command definitions: command_name:type (read/write)
 # Using simple array instead of associative array for bash 3.x compatibility
-READ_COMMANDS="olt-status onu-list onu-info port-list discover"
-WRITE_COMMANDS="onu-provision onu-delete onu-suspend onu-reboot port-enable port-disable"
+READ_COMMANDS="olt-status olt-alarms olt-health-check onu-list onu-info diagnose port-list port-power service-port-list discover vlan-list vlan-get"
+WRITE_COMMANDS="onu-provision onu-delete onu-suspend onu-resume onu-reboot onu-bulk-provision port-enable port-disable vlan-create vlan-delete service-port-add service-port-delete"
 
 # Function to check if command is a write command
 is_write_command() {
@@ -159,10 +159,10 @@ requires_cli() {
     local vendor="$1"
     local cmd="$2"
     # V-SOL now supports SNMP for read operations (onu-list, olt-status, port-list, onu-info)
-    # Only write operations (provision, delete, reboot) and discover require CLI
+    # Only write operations (provision, delete, reboot), discover, and diagnostics require CLI
     if [[ "$vendor" == "vsol" ]]; then
         case "$cmd" in
-            provision|delete|reboot|configure|discover)
+            provision|delete|reboot|configure|discover|diagnose|vlan-list|vlan-get|vlan-create|vlan-delete|service-port-list|service-port-add|service-port-delete|olt-alarms)
                 return 0  # These still require CLI
                 ;;
             *)
@@ -171,9 +171,27 @@ requires_cli() {
         esac
     fi
     # Huawei discover requires CLI
-    if [[ "$vendor" == "huawei" && "$cmd" == "discover" ]]; then
+    if [[ "$vendor" == "huawei" && ( "$cmd" == "discover" || "$cmd" == "service-port-list" ) ]]; then
         return 0
     fi
+    return 1
+}
+
+is_unsupported_command() {
+    local vendor="$1"
+    local cmd="$2"
+
+    if [[ "$vendor" == "huawei" ]]; then
+        case "$cmd" in
+            olt-status|olt-alarms|olt-health-check|onu-list|onu-info|port-list|port-power|service-port-list|discover|vlan-list|vlan-get|port-enable|port-disable|vlan-create|vlan-delete|service-port-add|service-port-delete)
+                return 0
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    fi
+
     return 1
 }
 
@@ -239,6 +257,13 @@ for vendor in $VENDORS_TO_TEST; do
         TOTAL=$((TOTAL + 1))
         TEST_NAME="$vendor/$cmd"
         log_test_start "$TEST_NAME"
+
+        if is_unsupported_command "$vendor" "$cmd"; then
+            log_test_skip "$TEST_NAME" "unsupported for vendor"
+            SKIPPED=$((SKIPPED + 1))
+            record_result "$RESULTS_FILE" "$TEST_NAME" "skipped" 0 "Unsupported for vendor" ""
+            continue
+        fi
 
         # Check if test script exists
         TEST_SCRIPT="$SCRIPT_DIR/commands/test-${cmd}.sh"

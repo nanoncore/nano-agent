@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -99,6 +101,30 @@ Examples:
 	RunE: runOLTStatus,
 }
 
+var oltAlarmsCmd = &cobra.Command{
+	Use:   "olt-alarms",
+	Short: "Show active OLT alarms",
+	Long: `Display active OLT alarms.
+
+Examples:
+  nano-agent olt-alarms --vendor vsol --address 192.168.1.1 --protocol cli --username admin --password admin
+  nano-agent olt-alarms --vendor vsol --address 192.168.1.1 --protocol cli --username admin --password admin --json`,
+	RunE: runOLTAlarms,
+}
+
+var oltHealthCheckCmd = &cobra.Command{
+	Use:   "olt-health-check",
+	Short: "Perform basic OLT health check",
+	Long: `Perform basic OLT health check.
+
+Checks OLT connectivity and evaluates PON port status.
+
+Examples:
+  nano-agent olt-health-check --vendor vsol --address 192.168.1.1 --protocol snmp --community public
+  nano-agent olt-health-check --vendor vsol --address 192.168.1.1 --protocol snmp --community public --json`,
+	RunE: runOLTHealthCheck,
+}
+
 var onuListCmd = &cobra.Command{
 	Use:   "onu-list",
 	Short: "List all provisioned ONUs on an OLT",
@@ -159,6 +185,18 @@ var (
 	onuSuspendONUID   int
 )
 
+// ONU resume flags
+var (
+	onuResumeSerial  string
+	onuResumePONPort string
+	onuResumeONUID   int
+)
+
+// ONU bulk provision flags
+var (
+	onuBulkCSV string
+)
+
 // ONU reboot flags
 var (
 	onuRebootSerial  string
@@ -182,6 +220,12 @@ var (
 var (
 	portPONPort string
 	portForce   bool
+)
+
+// Service port list flags
+var (
+	servicePortListPONPort string
+	servicePortListONUID   int
 )
 
 var onuInfoCmd = &cobra.Command{
@@ -275,6 +319,39 @@ Examples:
   nano-agent onu-suspend --pon-port 0/0/1 --onu-id 101 \
     --vendor huawei --address 192.168.1.1`,
 	RunE: runONUSuspend,
+}
+
+var onuResumeCmd = &cobra.Command{
+	Use:   "onu-resume",
+	Short: "Resume an ONU (enable traffic)",
+	Long: `Resume a suspended ONU and restore traffic.
+
+This command re-enables traffic for the specified ONU. The ONU can be
+identified by serial number OR by PON port and ONU ID.
+
+Examples:
+  # Resume by serial number
+  nano-agent onu-resume --serial HWTC12345678 \
+    --vendor huawei --address 192.168.1.1
+
+  # Resume by PON port and ONU ID
+  nano-agent onu-resume --pon-port 0/0/1 --onu-id 101 \
+    --vendor huawei --address 192.168.1.1`,
+	RunE: runONUResume,
+}
+
+var onuBulkProvisionCmd = &cobra.Command{
+	Use:   "onu-bulk-provision",
+	Short: "Provision multiple ONUs from a CSV file",
+	Long: `Provision multiple ONUs in a single operation using a CSV file.
+
+CSV columns (header row required):
+  serial,pon_port,onu_id,vlan,line_profile,service_profile,bandwidth_up,bandwidth_down,priority
+
+Examples:
+  nano-agent onu-bulk-provision --csv bulk.csv \
+    --vendor vsol --address 10.0.0.254 --protocol cli --username admin --password admin`,
+	RunE: runONUBulkProvision,
 }
 
 var onuRebootCmd = &cobra.Command{
@@ -372,12 +449,48 @@ Examples:
 	RunE: runPortDisable,
 }
 
+var portPowerCmd = &cobra.Command{
+	Use:   "port-power",
+	Short: "Get optical power readings for a PON port",
+	Long: `Retrieve optical power readings from a PON port's SFP/GBIC module.
+
+Returns transmit power, receive power (if available), and module temperature.
+
+Examples:
+  # Get power readings for a PON port
+  nano-agent port-power --pon-port 0/0/1 \
+    --vendor huawei --address 192.168.1.1 --port 161 --protocol snmp --community public
+
+  # Output as JSON
+  nano-agent port-power --pon-port 0/0/1 \
+    --vendor huawei --address 192.168.1.1 --port 161 --protocol snmp --community public --json`,
+	RunE: runPortPower,
+}
+
+var servicePortListCmd = &cobra.Command{
+	Use:   "service-port-list",
+	Short: "List service ports (VLAN to ONU mappings)",
+	Long: `List service ports configured on the OLT.
+
+Service ports map VLANs to specific ONUs and GEM ports.
+
+Examples:
+  # List all service ports
+  nano-agent service-port-list \
+    --vendor vsol --address 192.168.1.1 --port 22 --protocol cli --username admin --password admin
+
+  # Output as JSON
+  nano-agent service-port-list \
+    --vendor vsol --address 192.168.1.1 --port 22 --protocol cli --username admin --password admin --json`,
+	RunE: runServicePortList,
+}
+
 func init() {
 	// Common OLT connection flags for all OLT commands
 	oltCommands := []*cobra.Command{
-		discoverCmd, diagnoseCmd, oltStatusCmd, onuListCmd,
-		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuRebootCmd, onuUpdateCmd,
-		portListCmd, portEnableCmd, portDisableCmd,
+		discoverCmd, diagnoseCmd, oltStatusCmd, oltAlarmsCmd, oltHealthCheckCmd, onuListCmd,
+		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
+		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd, servicePortListCmd,
 	}
 	for _, cmd := range oltCommands {
 		cmd.Flags().StringVar(&oltVendor, "vendor", "", "OLT vendor (vsol, cdata, nokia, huawei, zte, etc.) [required]")
@@ -439,6 +552,15 @@ func init() {
 	onuSuspendCmd.Flags().StringVar(&onuSuspendPONPort, "pon-port", "", "PON port (required if not using serial)")
 	onuSuspendCmd.Flags().IntVar(&onuSuspendONUID, "onu-id", 0, "ONU ID (required if not using serial)")
 
+	// ONU resume flags
+	onuResumeCmd.Flags().StringVar(&onuResumeSerial, "serial", "", "ONU serial number")
+	onuResumeCmd.Flags().StringVar(&onuResumePONPort, "pon-port", "", "PON port (required if not using serial)")
+	onuResumeCmd.Flags().IntVar(&onuResumeONUID, "onu-id", 0, "ONU ID (required if not using serial)")
+
+	// ONU bulk provision flags
+	onuBulkProvisionCmd.Flags().StringVar(&onuBulkCSV, "csv", "", "CSV file with bulk provision operations [required]")
+	onuBulkProvisionCmd.MarkFlagRequired("csv")
+
 	// ONU reboot flags
 	onuRebootCmd.Flags().StringVar(&onuRebootSerial, "serial", "", "ONU serial number")
 	onuRebootCmd.Flags().StringVar(&onuRebootPONPort, "pon-port", "", "PON port (required if not using serial)")
@@ -465,20 +587,34 @@ func init() {
 	portDisableCmd.Flags().BoolVar(&portForce, "force", false, "Confirm the disable operation")
 	portDisableCmd.MarkFlagRequired("pon-port")
 
+	// Port power flags
+	portPowerCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
+	portPowerCmd.MarkFlagRequired("pon-port")
+
+	// Service port list flags
+	servicePortListCmd.Flags().StringVar(&servicePortListPONPort, "pon-port", "", "Filter by PON port (optional)")
+	servicePortListCmd.Flags().IntVar(&servicePortListONUID, "onu-id", 0, "Filter by ONU ID (optional)")
+
 	// Add commands to root
 	rootCmd.AddCommand(discoverCmd)
 	rootCmd.AddCommand(diagnoseCmd)
 	rootCmd.AddCommand(oltStatusCmd)
+	rootCmd.AddCommand(oltAlarmsCmd)
+	rootCmd.AddCommand(oltHealthCheckCmd)
 	rootCmd.AddCommand(onuListCmd)
 	rootCmd.AddCommand(onuInfoCmd)
 	rootCmd.AddCommand(onuProvisionCmd)
 	rootCmd.AddCommand(onuDeleteCmd)
 	rootCmd.AddCommand(onuSuspendCmd)
+	rootCmd.AddCommand(onuResumeCmd)
+	rootCmd.AddCommand(onuBulkProvisionCmd)
 	rootCmd.AddCommand(onuRebootCmd)
 	rootCmd.AddCommand(onuUpdateCmd)
 	rootCmd.AddCommand(portListCmd)
 	rootCmd.AddCommand(portEnableCmd)
 	rootCmd.AddCommand(portDisableCmd)
+	rootCmd.AddCommand(portPowerCmd)
+	rootCmd.AddCommand(servicePortListCmd)
 }
 
 // createOLTDriver creates a driver connection to the OLT
@@ -982,6 +1118,288 @@ func runOLTStatus(cmd *cobra.Command, args []string) error {
 
 		fmt.Printf("Last poll: %s\n", status.LastPoll.Format("2006-01-02 15:04:05"))
 	}
+
+	return nil
+}
+
+func runOLTAlarms(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("OLT Alarms\n")
+		fmt.Printf("==========\n\n")
+	}
+
+	driver, err := createOLTDriver()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	config := &types.EquipmentConfig{
+		Name:          "cli-session",
+		Vendor:        types.Vendor(strings.ToLower(oltVendor)),
+		Address:       oltAddress,
+		Port:          oltPort,
+		Protocol:      types.Protocol(strings.ToLower(oltProtocol)),
+		Username:      oltUsername,
+		Password:      oltPassword,
+		SNMPCommunity: oltCommunity,
+		SNMPVersion:   oltSNMPVersion,
+		TLSEnabled:    oltTLS,
+		TLSSkipVerify: oltTLSSkipVe,
+		Timeout:       60 * time.Second,
+		Metadata:      make(map[string]string),
+	}
+	if oltProtocol == "snmp" {
+		config.Metadata["snmp_community"] = oltCommunity
+		config.Metadata["snmp_version"] = oltSNMPVersion
+	}
+
+	if !outputJSON {
+		fmt.Printf("Connecting to OLT... ")
+	}
+	if err := driver.Connect(ctx, config); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer driver.Disconnect(ctx)
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+
+	driverV2, ok := driver.(types.DriverV2)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support OLT alarms", oltVendor)
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting OLT alarms... ")
+	}
+	alarms, err := driverV2.GetAlarms(ctx)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to get alarms: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+
+	if outputJSON {
+		output, _ := json.MarshalIndent(alarms, "", "  ")
+		fmt.Println(string(output))
+		return nil
+	}
+
+	if len(alarms) == 0 {
+		fmt.Printf("No active alarms.\n")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tSeverity\tType\tSource\tSource ID\tMessage\tRaised At")
+	fmt.Fprintln(w, "--\t--------\t----\t------\t---------\t-------\t---------")
+	for _, alarm := range alarms {
+		raisedAt := ""
+		if !alarm.RaisedAt.IsZero() {
+			raisedAt = alarm.RaisedAt.Format("2006-01-02 15:04:05")
+		}
+		fmt.Fprintf(
+			w,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			alarm.ID,
+			alarm.Severity,
+			alarm.Type,
+			alarm.Source,
+			alarm.SourceID,
+			alarm.Message,
+			raisedAt,
+		)
+	}
+	w.Flush()
+
+	return nil
+}
+
+func runOLTHealthCheck(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("OLT Health Check\n")
+		fmt.Printf("================\n\n")
+	}
+
+	driver, err := createOLTDriver()
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	config := &types.EquipmentConfig{
+		Name:          "cli-session",
+		Vendor:        types.Vendor(strings.ToLower(oltVendor)),
+		Address:       oltAddress,
+		Port:          oltPort,
+		Protocol:      types.Protocol(strings.ToLower(oltProtocol)),
+		Username:      oltUsername,
+		Password:      oltPassword,
+		SNMPCommunity: oltCommunity,
+		SNMPVersion:   oltSNMPVersion,
+		TLSEnabled:    oltTLS,
+		TLSSkipVerify: oltTLSSkipVe,
+		Timeout:       60 * time.Second,
+		Metadata:      make(map[string]string),
+	}
+	if oltProtocol == "snmp" {
+		config.Metadata["snmp_community"] = oltCommunity
+		config.Metadata["snmp_version"] = oltSNMPVersion
+	}
+
+	if !outputJSON {
+		fmt.Printf("Connecting to OLT... ")
+	}
+	if err := driver.Connect(ctx, config); err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to connect: %w", err)
+	}
+	defer driver.Disconnect(ctx)
+	if !outputJSON {
+		fmt.Printf("OK\n")
+	}
+
+	driverV2, ok := driver.(types.DriverV2)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support OLT health check", oltVendor)
+	}
+
+	// Thresholds (best-practice defaults)
+	const (
+		tempWarnC  = 70.0
+		tempCritC  = 80.0
+		cpuWarnPct = 75.0
+		cpuCritPct = 90.0
+		memWarnPct = 80.0
+		memCritPct = 90.0
+	)
+
+	if !outputJSON {
+		fmt.Printf("Checking PON ports... ")
+	}
+	ports, err := driverV2.ListPorts(ctx)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to list PON ports: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+
+	var healthIssues []string
+	var warnings []string
+
+	for _, port := range ports {
+		status := strings.ToLower(port.OperState)
+		adminStatus := strings.ToLower(port.AdminState)
+		if adminStatus == "enable" && (status == "down" || status == "offline") {
+			healthIssues = append(healthIssues, fmt.Sprintf("%s is down while enabled", port.Port))
+		}
+	}
+
+	// Optional metrics from OLT status (may be missing for some vendors)
+	status, statusErr := driverV2.GetOLTStatus(ctx)
+	if statusErr == nil && status != nil {
+		if status.Temperature > 0 {
+			switch {
+			case status.Temperature >= tempCritC:
+				healthIssues = append(healthIssues, fmt.Sprintf("temperature %.1fC exceeds critical threshold %.1fC", status.Temperature, tempCritC))
+			case status.Temperature >= tempWarnC:
+				warnings = append(warnings, fmt.Sprintf("temperature %.1fC exceeds warning threshold %.1fC", status.Temperature, tempWarnC))
+			}
+		}
+		if status.CPUPercent > 0 {
+			switch {
+			case status.CPUPercent >= cpuCritPct:
+				healthIssues = append(healthIssues, fmt.Sprintf("cpu %.1f%% exceeds critical threshold %.1f%%", status.CPUPercent, cpuCritPct))
+			case status.CPUPercent >= cpuWarnPct:
+				warnings = append(warnings, fmt.Sprintf("cpu %.1f%% exceeds warning threshold %.1f%%", status.CPUPercent, cpuWarnPct))
+			}
+		}
+		if status.MemoryPercent > 0 {
+			switch {
+			case status.MemoryPercent >= memCritPct:
+				healthIssues = append(healthIssues, fmt.Sprintf("memory %.1f%% exceeds critical threshold %.1f%%", status.MemoryPercent, memCritPct))
+			case status.MemoryPercent >= memWarnPct:
+				warnings = append(warnings, fmt.Sprintf("memory %.1f%% exceeds warning threshold %.1f%%", status.MemoryPercent, memWarnPct))
+			}
+		}
+	}
+
+	// Optional alarms (if vendor supports CLI alarm retrieval)
+	if alarms, alarmsErr := driverV2.GetAlarms(ctx); alarmsErr == nil {
+		for _, alarm := range alarms {
+			sev := strings.ToLower(alarm.Severity)
+			msg := alarm.Message
+			if msg == "" {
+				msg = alarm.Type
+			}
+			switch sev {
+			case "critical", "major":
+				healthIssues = append(healthIssues, fmt.Sprintf("alarm %s: %s", sev, msg))
+			case "minor", "warning":
+				warnings = append(warnings, fmt.Sprintf("alarm %s: %s", sev, msg))
+			}
+		}
+	}
+
+	healthy := len(healthIssues) == 0
+	message := "OLT is healthy"
+	if !healthy {
+		message = strings.Join(healthIssues, "; ")
+	}
+
+	if outputJSON {
+		output, _ := json.MarshalIndent(map[string]interface{}{
+			"healthy":    healthy,
+			"message":    message,
+			"issues":     healthIssues,
+			"warnings":   warnings,
+			"port_count": len(ports),
+			"thresholds": map[string]float64{
+				"temp_warn_c":  tempWarnC,
+				"temp_crit_c":  tempCritC,
+				"cpu_warn_pct": cpuWarnPct,
+				"cpu_crit_pct": cpuCritPct,
+				"mem_warn_pct": memWarnPct,
+				"mem_crit_pct": memCritPct,
+			},
+		}, "", "  ")
+		fmt.Println(string(output))
+		return nil
+	}
+
+	if healthy {
+		fmt.Printf("Health: OK\n")
+	} else {
+		fmt.Printf("Health: Issues detected\n")
+		for _, issue := range healthIssues {
+			fmt.Printf("  - %s\n", issue)
+		}
+	}
+	if len(warnings) > 0 {
+		fmt.Printf("Warnings:\n")
+		for _, warn := range warnings {
+			fmt.Printf("  - %s\n", warn)
+		}
+	}
+	fmt.Printf("PON ports checked: %d\n", len(ports))
 
 	return nil
 }
@@ -1490,6 +1908,120 @@ func outputSuspendResult(serial, ponPort string, onuID int) error {
 	return nil
 }
 
+func runONUResume(cmd *cobra.Command, args []string) error {
+	if err := validateONUIdentifier(onuResumeSerial, onuResumePONPort, onuResumeONUID); err != nil {
+		return err
+	}
+
+	printResumeHeader(onuResumeSerial, onuResumePONPort, onuResumeONUID)
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	ponPort, onuID, err := resolveONU(conn.ctx, driverV2, onuResumeSerial, onuResumePONPort, onuResumeONUID)
+	if err != nil {
+		return err
+	}
+
+	if err := executeResume(conn.ctx, conn.driver, ponPort, onuID); err != nil {
+		return err
+	}
+
+	return outputResumeResult(onuResumeSerial, ponPort, onuID)
+}
+
+// outputResumeResult outputs resume results
+func outputResumeResult(serial, ponPort string, onuID int) error {
+	if outputJSON {
+		output := struct {
+			Status  string `json:"status"`
+			Serial  string `json:"serial,omitempty"`
+			PONPort string `json:"pon_port"`
+			ONUID   int    `json:"onu_id"`
+		}{Status: "resumed", Serial: serial, PONPort: ponPort, ONUID: onuID}
+		data, _ := json.MarshalIndent(output, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+	printResumeSuccess(ponPort, onuID)
+	return nil
+}
+
+func runONUBulkProvision(cmd *cobra.Command, args []string) error {
+	if onuBulkCSV == "" {
+		return fmt.Errorf("--csv is required")
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	ops, err := loadBulkProvisionCSV(onuBulkCSV)
+	if err != nil {
+		return err
+	}
+
+	if err := assignBulkONUIDs(conn.ctx, driverV2, ops); err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("ONU Bulk Provision\n")
+		fmt.Printf("==================\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Operations: %d\n\n", len(ops))
+		fmt.Printf("Provisioning... ")
+	}
+
+	result, err := driverV2.BulkProvision(conn.ctx, ops)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("bulk provision failed: %w", err)
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(result, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Printf("OK\n\n")
+	fmt.Printf("Summary:\n")
+	fmt.Printf("  Succeeded: %d\n", result.Succeeded)
+	fmt.Printf("  Failed:    %d\n", result.Failed)
+	fmt.Printf("\nResults:\n")
+	for _, r := range result.Results {
+		status := "OK"
+		if !r.Success {
+			status = "FAILED"
+		}
+		fmt.Printf("  %s - %s %s onu %d", status, r.Serial, r.PONPort, r.ONUID)
+		if r.Error != "" {
+			fmt.Printf(" (%s)", r.Error)
+		}
+		fmt.Println()
+	}
+
+	return nil
+}
+
 func runONUReboot(cmd *cobra.Command, args []string) error {
 	if err := validateONUIdentifier(onuRebootSerial, onuRebootPONPort, onuRebootONUID); err != nil {
 		return err
@@ -1534,6 +2066,127 @@ func outputRebootResult(serial, ponPort string, onuID int) error {
 		return nil
 	}
 	printRebootSuccess(ponPort, onuID)
+	return nil
+}
+
+func loadBulkProvisionCSV(path string) ([]types.BulkProvisionOp, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open csv: %w", err)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	reader.TrimLeadingSpace = true
+
+	headers, err := reader.Read()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read csv header: %w", err)
+	}
+
+	index := map[string]int{}
+	for i, h := range headers {
+		key := strings.ToLower(strings.TrimSpace(h))
+		index[key] = i
+	}
+
+	get := func(row []string, key string) string {
+		idx, ok := index[key]
+		if !ok || idx >= len(row) {
+			return ""
+		}
+		return strings.TrimSpace(row[idx])
+	}
+
+	var ops []types.BulkProvisionOp
+	for {
+		row, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read csv row: %w", err)
+		}
+
+		serial := get(row, "serial")
+		ponPort := get(row, "pon_port")
+		if serial == "" || ponPort == "" {
+			return nil, fmt.Errorf("serial and pon_port are required")
+		}
+
+		onuID, _ := strconv.Atoi(get(row, "onu_id"))
+		vlan, _ := strconv.Atoi(get(row, "vlan"))
+		bwUp, _ := strconv.Atoi(get(row, "bandwidth_up"))
+		bwDown, _ := strconv.Atoi(get(row, "bandwidth_down"))
+		priority, _ := strconv.Atoi(get(row, "priority"))
+		lineProfile := get(row, "line_profile")
+		serviceProfile := get(row, "service_profile")
+
+		op := types.BulkProvisionOp{
+			Serial:  serial,
+			PONPort: ponPort,
+			ONUID:   onuID,
+			Profile: &types.ONUProfile{
+				LineProfile:    lineProfile,
+				ServiceProfile: serviceProfile,
+				BandwidthUp:    bwUp,
+				BandwidthDown:  bwDown,
+				VLAN:           vlan,
+				Priority:       priority,
+			},
+		}
+
+		ops = append(ops, op)
+	}
+
+	if len(ops) == 0 {
+		return nil, fmt.Errorf("no operations found in csv")
+	}
+
+	return ops, nil
+}
+
+func assignBulkONUIDs(ctx context.Context, driver types.DriverV2, ops []types.BulkProvisionOp) error {
+	usedByPort := map[string]map[int]struct{}{}
+
+	for _, op := range ops {
+		if _, ok := usedByPort[op.PONPort]; !ok {
+			usedByPort[op.PONPort] = map[int]struct{}{}
+		}
+		if op.ONUID > 0 {
+			usedByPort[op.PONPort][op.ONUID] = struct{}{}
+		}
+	}
+
+	for port := range usedByPort {
+		onus, err := driver.GetONUList(ctx, &types.ONUFilter{PONPort: port})
+		if err != nil {
+			return fmt.Errorf("failed to list ONUs on %s: %w", port, err)
+		}
+		for _, onu := range onus {
+			usedByPort[port][onu.ONUID] = struct{}{}
+		}
+	}
+
+	for i, op := range ops {
+		if op.ONUID > 0 {
+			continue
+		}
+		used := usedByPort[op.PONPort]
+		assigned := 0
+		for id := 1; id <= 128; id++ {
+			if _, exists := used[id]; !exists {
+				assigned = id
+				used[id] = struct{}{}
+				break
+			}
+		}
+		if assigned == 0 {
+			return fmt.Errorf("no available ONU IDs on port %s", op.PONPort)
+		}
+		ops[i].ONUID = assigned
+	}
+
 	return nil
 }
 
@@ -1933,6 +2586,142 @@ func runPortDisable(cmd *cobra.Command, args []string) error {
 		data, _ := json.MarshalIndent(output, "", "  ")
 		fmt.Println(string(data))
 	}
+
+	return nil
+}
+
+func runPortPower(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("Port Power\n")
+		fmt.Printf("==========\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Port: %s\n\n", portPONPort)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting power readings... ")
+	}
+	reading, err := driverV2.GetPONPower(conn.ctx, portPONPort)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to get port power: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK\n\n")
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(reading, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Printf("Tx Power:     %.3f dBm\n", reading.TxPowerDBm)
+	if reading.RxPowerDBm != 0 {
+		fmt.Printf("Rx Power:     %.3f dBm\n", reading.RxPowerDBm)
+	}
+	if reading.Temperature != 0 {
+		fmt.Printf("Temperature: %.2f °C\n", reading.Temperature)
+	}
+	fmt.Printf("Timestamp:   %s\n", reading.Timestamp.Format("2006-01-02 15:04:05"))
+
+	return nil
+}
+
+func runServicePortList(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("Service Port List\n")
+		fmt.Printf("=================\n\n")
+		fmt.Printf("OLT: %s (%s)\n\n", oltAddress, oltVendor)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	driverV2, err := conn.getDriverV2()
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Getting service ports... ")
+	}
+	servicePorts, err := driverV2.ListServicePorts(conn.ctx)
+	if err != nil {
+		if !outputJSON {
+			fmt.Printf("FAILED\n")
+		}
+		return fmt.Errorf("failed to list service ports: %w", err)
+	}
+	if !outputJSON {
+		fmt.Printf("OK (%d found)\n\n", len(servicePorts))
+	}
+
+	filtered := servicePorts
+	if servicePortListPONPort != "" || servicePortListONUID > 0 {
+		filtered = make([]types.ServicePort, 0, len(servicePorts))
+		for _, sp := range servicePorts {
+			if servicePortListPONPort != "" {
+				if sp.Interface != servicePortListPONPort &&
+					("0/"+sp.Interface) != servicePortListPONPort &&
+					!strings.HasSuffix(servicePortListPONPort, sp.Interface) {
+					continue
+				}
+			}
+			if servicePortListONUID > 0 && sp.ONTID != servicePortListONUID {
+				continue
+			}
+			filtered = append(filtered, sp)
+		}
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(filtered, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if len(filtered) == 0 {
+		fmt.Println("No service ports found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "Index\tVLAN\tPON\tONU\tGEM\tUser VLAN\tTag")
+	fmt.Fprintln(w, "-----\t----\t---\t---\t---\t---------\t---")
+	for _, sp := range filtered {
+		userVLAN := "-"
+		if sp.UserVLAN != 0 {
+			userVLAN = fmt.Sprintf("%d", sp.UserVLAN)
+		}
+		tag := sp.TagTransform
+		if tag == "" {
+			tag = "-"
+		}
+		gem := "-"
+		if sp.GemPort != 0 {
+			gem = fmt.Sprintf("%d", sp.GemPort)
+		}
+		fmt.Fprintf(w, "%d\t%d\t%s\t%d\t%s\t%s\t%s\n",
+			sp.Index, sp.VLAN, sp.Interface, sp.ONTID, gem, userVLAN, tag)
+	}
+	w.Flush()
 
 	return nil
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Test: port-disable command
+# Test: service-port-add command
 # Note: This is a write operation
 # =============================================================================
 set -euo pipefail
@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-log_info "Testing port-disable for vendor: $VENDOR (protocol: $PROTOCOL)"
+log_info "Testing service-port-add for vendor: $VENDOR (protocol: $PROTOCOL)"
 
 # Build CLI command arguments
 CMD_ARGS="--vendor $VENDOR --address $ADDRESS --port $PORT --protocol $PROTOCOL"
@@ -46,61 +46,51 @@ if [[ -n "$COMMUNITY" ]]; then
     CMD_ARGS="$CMD_ARGS --community $COMMUNITY"
 fi
 
-# =============================================================================
-# Test 1: Help output
-# =============================================================================
-log_info "Test 1: Verify help output"
-
-HELP_OUTPUT=$("$BINARY" port-disable --help 2>&1) || true
-
-assert_contains "$HELP_OUTPUT" "port" "Help should mention port parameter"
-
-log_info "Test 1 passed: Help output is correct"
+PON_PORT="${VSOL_SERVICE_PORT_ADD_PON_PORT:-0/1}"
+ONU_ID="${VSOL_SERVICE_PORT_ADD_ONU_ID:-2}"
+VLAN_ID="${VSOL_SERVICE_PORT_ADD_VLAN:-703}"
+GEMPORT_ID="${VSOL_SERVICE_PORT_ADD_GEMPORT:-1}"
+USER_VLAN="${VSOL_SERVICE_PORT_ADD_USER_VLAN:-$VLAN_ID}"
 
 # =============================================================================
-# Test 2: Missing port parameter
+# Test 1: Add service port
 # =============================================================================
-log_info "Test 2: Missing port should fail"
+log_info "Test 1: Add service port on $PON_PORT ONU $ONU_ID VLAN $VLAN_ID"
 
-set +e
-ERROR_OUTPUT=$("$BINARY" port-disable $CMD_ARGS 2>&1)
-EXIT_CODE=$?
-set -e
+ADD_OUTPUT=$("$BINARY" service-port-add $CMD_ARGS \
+    --pon-port "$PON_PORT" --ont-id "$ONU_ID" --vlan-id "$VLAN_ID" \
+    --gemport "$GEMPORT_ID" --user-vlan "$USER_VLAN" 2>&1) || {
+    log_error "Service port add failed: $ADD_OUTPUT"
+    exit 1
+}
 
-if [[ $EXIT_CODE -ne 0 ]]; then
-    log_info "Test 2 passed: Command correctly fails without port"
-else
-    log_warn "Test 2: Command did not fail as expected"
+assert_contains "$ADD_OUTPUT" "Service port added successfully" "Expected success message"
+
+log_info "Test 1 passed: Service port added"
+
+# =============================================================================
+# Test 2: Verify via service-port-list (CLI)
+# =============================================================================
+log_info "Test 2: Verify service port in CLI list"
+
+LIST_OUTPUT=$("$BINARY" service-port-list $CMD_ARGS --json 2>&1) || {
+    log_error "Service port list failed: $LIST_OUTPUT"
+    exit 1
+}
+
+assert_json_valid "$LIST_OUTPUT"
+
+MATCH_COUNT=$(echo "$LIST_OUTPUT" | jq "[.[] | select(.interface==\"$PON_PORT\" and .ont_id==$ONU_ID and .vlan==$VLAN_ID)] | length")
+if [[ "$MATCH_COUNT" -le 0 ]]; then
+    log_error "Expected service port entry in CLI list"
+    log_error "Value: $MATCH_COUNT"
+    exit 1
 fi
 
-# =============================================================================
-# Summary
-# =============================================================================
-# =============================================================================
-# Test 3: Disable then enable port
-# =============================================================================
-PORT_TO_TOGGLE="${VSOL_PORT_DISABLE_PON_PORT:-0/4}"
-
-log_info "Test 3: Disable then enable port $PORT_TO_TOGGLE"
-
-DISABLE_OUTPUT=$("$BINARY" port-disable $CMD_ARGS --pon-port "$PORT_TO_TOGGLE" --force 2>&1) || {
-    log_error "Port disable failed: $DISABLE_OUTPUT"
-    exit 1
-}
-
-assert_contains "$DISABLE_OUTPUT" "disabled successfully" "Expected port disable success message"
-
-ENABLE_OUTPUT=$("$BINARY" port-enable $CMD_ARGS --pon-port "$PORT_TO_TOGGLE" 2>&1) || {
-    log_error "Port enable failed: $ENABLE_OUTPUT"
-    exit 1
-}
-
-assert_contains "$ENABLE_OUTPUT" "enabled successfully" "Expected port enable success message"
-
-log_info "Test 3 passed: Port toggled successfully"
+log_info "Test 2 passed: Service port found in CLI list"
 
 # =============================================================================
 # Summary
 # =============================================================================
-log_success "All port-disable tests passed for $VENDOR"
+log_success "All service-port-add tests passed for $VENDOR"
 exit 0
