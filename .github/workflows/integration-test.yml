@@ -170,6 +170,7 @@ jobs:
     needs: [build, check-simulator-image, build-simulator]
     runs-on: ubuntu-latest
     continue-on-error: false
+    if: ${{ always() && needs.build.result == 'success' && needs.check-simulator-image.result == 'success' && (needs.build-simulator.result == 'success' || needs.build-simulator.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
