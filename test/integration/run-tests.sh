@@ -266,11 +266,7 @@ for vendor in $VENDORS_TO_TEST; do
         fi
 
         # Check if test script exists
-        if [[ "$cmd" == profile-onu-list || "$cmd" == profile-onu-get || "$cmd" == profile-onu-create || "$cmd" == profile-onu-delete ]]; then
-            TEST_SCRIPT="$SCRIPT_DIR/commands/test-profile-onu.sh"
-        else
-            TEST_SCRIPT="$SCRIPT_DIR/commands/test-${cmd}.sh"
-        fi
+        TEST_SCRIPT="$SCRIPT_DIR/commands/test-${cmd}.sh"
         if [[ ! -f "$TEST_SCRIPT" ]]; then
             log_test_skip "$TEST_NAME" "no test script"
             SKIPPED=$((SKIPPED + 1))
