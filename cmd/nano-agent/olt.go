@@ -2823,33 +2823,54 @@ func runProfileONUList(cmd *cobra.Command, args []string) error {
 	}
 	defer conn.close()
 
-	exec, ok := conn.driver.(types.CLIExecutor)
+	manager, ok := conn.driver.(types.ONUProfileManager)
 	if !ok {
-		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+		return fmt.Errorf("driver for vendor %s does not support ONU profile operations", oltVendor)
 	}
 
-	commands := []string{
-		"configure terminal",
-		"show profile onu",
-		"exit",
-	}
-	outputs, err := exec.ExecCommands(conn.ctx, commands)
+	profiles, err := manager.ListONUProfiles(conn.ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list ONU profiles: %w", err)
-	}
-	showOutput := ""
-	if len(outputs) >= 2 {
-		showOutput = outputs[1]
+		return err
 	}
 
 	if outputJSON {
-		payload := map[string]string{"output": showOutput}
-		data, _ := json.MarshalIndent(payload, "", "  ")
+		data, _ := json.MarshalIndent(profiles, "", "  ")
 		fmt.Println(string(data))
 		return nil
 	}
 
-	fmt.Print(showOutput)
+	if len(profiles) == 0 {
+		fmt.Println("No profiles found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "Name\tID\tEth\tPOTS\tIPHost\tIPv6Host\tVEIP\tTCONT\tGemport\tCommit")
+	fmt.Fprintln(w, "----\t--\t---\t----\t------\t--------\t----\t-----\t-------\t------")
+	for _, p := range profiles {
+		id := "-"
+		if p.ID != nil {
+			id = fmt.Sprintf("%d", *p.ID)
+		}
+		eth := formatOptionalInt(p.Ports, func(ports *types.ONUProfilePorts) *int { return ports.Eth })
+		pots := formatOptionalInt(p.Ports, func(ports *types.ONUProfilePorts) *int { return ports.Pots })
+		iphost := formatOptionalInt(p.Ports, func(ports *types.ONUProfilePorts) *int { return ports.IPHost })
+		ipv6 := formatOptionalInt(p.Ports, func(ports *types.ONUProfilePorts) *int { return ports.IPv6Host })
+		veip := formatOptionalInt(p.Ports, func(ports *types.ONUProfilePorts) *int { return ports.Veip })
+		tcont := formatOptionalValue(p.TcontNum)
+		gem := formatOptionalValue(p.GemportNum)
+		commit := "-"
+		if p.Committed != nil {
+			if *p.Committed {
+				commit = "yes"
+			} else {
+				commit = "no"
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			p.Name, id, eth, pots, iphost, ipv6, veip, tcont, gem, commit)
+	}
+	w.Flush()
 	return nil
 }
 
@@ -2869,33 +2890,23 @@ func runProfileONUGet(cmd *cobra.Command, args []string) error {
 	}
 	defer conn.close()
 
-	exec, ok := conn.driver.(types.CLIExecutor)
+	manager, ok := conn.driver.(types.ONUProfileManager)
 	if !ok {
-		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+		return fmt.Errorf("driver for vendor %s does not support ONU profile operations", oltVendor)
 	}
 
-	commands := []string{
-		"configure terminal",
-		fmt.Sprintf("show profile onu name %s", name),
-		"exit",
-	}
-	outputs, err := exec.ExecCommands(conn.ctx, commands)
+	profile, err := manager.GetONUProfile(conn.ctx, name)
 	if err != nil {
-		return fmt.Errorf("failed to get ONU profile: %w", err)
-	}
-	showOutput := ""
-	if len(outputs) >= 2 {
-		showOutput = outputs[1]
+		return err
 	}
 
 	if outputJSON {
-		payload := map[string]string{"output": showOutput}
-		data, _ := json.MarshalIndent(payload, "", "  ")
+		data, _ := json.MarshalIndent(profile, "", "  ")
 		fmt.Println(string(data))
 		return nil
 	}
 
-	fmt.Print(showOutput)
+	printONUProfile(profile)
 	return nil
 }
 
@@ -2920,25 +2931,13 @@ func runProfileONUCreate(cmd *cobra.Command, args []string) error {
 	}
 	defer conn.close()
 
-	exec, ok := conn.driver.(types.CLIExecutor)
+	manager, ok := conn.driver.(types.ONUProfileManager)
 	if !ok {
-		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+		return fmt.Errorf("driver for vendor %s does not support ONU profile operations", oltVendor)
 	}
 
-	commands := buildProfileCreateCommands(profile)
-	outputs, err := exec.ExecCommands(conn.ctx, commands)
-	if err != nil {
-		return fmt.Errorf("failed to create ONU profile: %w", err)
-	}
-
-	if outputJSON {
-		payload := map[string]interface{}{
-			"commands": commands,
-			"output":   outputs,
-		}
-		data, _ := json.MarshalIndent(payload, "", "  ")
-		fmt.Println(string(data))
-		return nil
+	if err := manager.CreateONUProfile(conn.ctx, profile); err != nil {
+		return err
 	}
 
 	fmt.Println("Profile created. (If you didn't set any fields, defaults were used.)")
@@ -2961,29 +2960,13 @@ func runProfileONUDelete(cmd *cobra.Command, args []string) error {
 	}
 	defer conn.close()
 
-	exec, ok := conn.driver.(types.CLIExecutor)
+	manager, ok := conn.driver.(types.ONUProfileManager)
 	if !ok {
-		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+		return fmt.Errorf("driver for vendor %s does not support ONU profile operations", oltVendor)
 	}
 
-	commands := []string{
-		"configure terminal",
-		fmt.Sprintf("no profile onu name %s", name),
-		"exit",
-	}
-	outputs, err := exec.ExecCommands(conn.ctx, commands)
-	if err != nil {
-		return fmt.Errorf("failed to delete ONU profile: %w", err)
-	}
-
-	if outputJSON {
-		payload := map[string]interface{}{
-			"commands": commands,
-			"output":   outputs,
-		}
-		data, _ := json.MarshalIndent(payload, "", "  ")
-		fmt.Println(string(data))
-		return nil
+	if err := manager.DeleteONUProfile(conn.ctx, name); err != nil {
+		return err
 	}
 
 	fmt.Println("Profile delete requested.")
@@ -3063,56 +3046,68 @@ func buildProfileFromFlags(name string) (*types.ONUHardwareProfile, error) {
 	return profile, nil
 }
 
-func buildProfileCreateCommands(profile *types.ONUHardwareProfile) []string {
-	commands := []string{
-		"configure terminal",
-		fmt.Sprintf("profile onu name %s", profile.Name),
+func formatOptionalValue(value *int) string {
+	if value == nil {
+		return "-"
+	}
+	return fmt.Sprintf("%d", *value)
+}
+
+func formatOptionalInt(ports *types.ONUProfilePorts, selector func(*types.ONUProfilePorts) *int) string {
+	if ports == nil {
+		return "-"
+	}
+	value := selector(ports)
+	return formatOptionalValue(value)
+}
+
+func printONUProfile(profile *types.ONUHardwareProfile) {
+	if profile == nil {
+		fmt.Println("Profile not found.")
+		return
 	}
 
-	if profile.Ports != nil {
-		if profile.Ports.Eth != nil {
-			commands = append(commands, fmt.Sprintf("port-num eth %d", *profile.Ports.Eth))
-		}
-		if profile.Ports.Pots != nil {
-			commands = append(commands, fmt.Sprintf("port-num pots %d", *profile.Ports.Pots))
-		}
-		if profile.Ports.IPHost != nil {
-			commands = append(commands, fmt.Sprintf("port-num iphost %d", *profile.Ports.IPHost))
-		}
-		if profile.Ports.IPv6Host != nil {
-			commands = append(commands, fmt.Sprintf("port-num ipv6host %d", *profile.Ports.IPv6Host))
-		}
-		if profile.Ports.Veip != nil {
-			commands = append(commands, fmt.Sprintf("port-num veip %d", *profile.Ports.Veip))
-		}
-	}
-
-	if profile.TcontNum != nil && profile.GemportNum != nil {
-		commands = append(commands, fmt.Sprintf("tcont-num %d gemport-num %d", *profile.TcontNum, *profile.GemportNum))
-	}
-
-	if profile.SwitchNum != nil {
-		commands = append(commands, fmt.Sprintf("switch-num %d", *profile.SwitchNum))
-	}
-	if profile.ServiceAbility != nil {
-		commands = append(commands, fmt.Sprintf("service-ability %s", *profile.ServiceAbility))
-	}
-	if profile.OmciSendMode != nil {
-		commands = append(commands, fmt.Sprintf("omci-send-mode %s", *profile.OmciSendMode))
-	}
-	if profile.ExOMCI != nil && *profile.ExOMCI {
-		commands = append(commands, "ex-omci")
-	}
-	if profile.WifiMngViaNonOMCI != nil && *profile.WifiMngViaNonOMCI {
-		commands = append(commands, "wifi-mng-via-non-omci")
-	}
-	if profile.DefaultMulticastRange != nil {
-		commands = append(commands, fmt.Sprintf("default-multicast-range %s", *profile.DefaultMulticastRange))
+	fmt.Printf("Name: %s\n", profile.Name)
+	if profile.ID != nil {
+		fmt.Printf("ID: %d\n", *profile.ID)
 	}
 	if profile.Description != nil {
-		commands = append(commands, fmt.Sprintf("description %q", *profile.Description))
+		fmt.Printf("Description: %s\n", *profile.Description)
 	}
-
-	commands = append(commands, "commit", "exit", "exit")
-	return commands
+	if profile.Ports != nil {
+		fmt.Printf("Ports (eth/pots/iphost/ipv6host/veip): %s/%s/%s/%s/%s\n",
+			formatOptionalValue(profile.Ports.Eth),
+			formatOptionalValue(profile.Ports.Pots),
+			formatOptionalValue(profile.Ports.IPHost),
+			formatOptionalValue(profile.Ports.IPv6Host),
+			formatOptionalValue(profile.Ports.Veip),
+		)
+	}
+	if profile.TcontNum != nil {
+		fmt.Printf("TCONT Num: %d\n", *profile.TcontNum)
+	}
+	if profile.GemportNum != nil {
+		fmt.Printf("GEMPORT Num: %d\n", *profile.GemportNum)
+	}
+	if profile.SwitchNum != nil {
+		fmt.Printf("Switch Num: %d\n", *profile.SwitchNum)
+	}
+	if profile.ServiceAbility != nil {
+		fmt.Printf("Service Ability: %s\n", *profile.ServiceAbility)
+	}
+	if profile.OmciSendMode != nil {
+		fmt.Printf("OMCI Send Mode: %s\n", *profile.OmciSendMode)
+	}
+	if profile.ExOMCI != nil {
+		fmt.Printf("Ex-OMCI: %t\n", *profile.ExOMCI)
+	}
+	if profile.WifiMngViaNonOMCI != nil {
+		fmt.Printf("WiFi Mng via non-OMCI: %t\n", *profile.WifiMngViaNonOMCI)
+	}
+	if profile.DefaultMulticastRange != nil {
+		fmt.Printf("Default Multicast Range: %s\n", *profile.DefaultMulticastRange)
+	}
+	if profile.Committed != nil {
+		fmt.Printf("Committed: %t\n", *profile.Committed)
+	}
 }
