@@ -58,14 +58,13 @@ CREATE_OUTPUT=$(
 
 assert_contains "$CREATE_OUTPUT" "Profile created" "Expected create success message"
 
-LIST_OUTPUT=$("$BINARY" profile-onu list $CMD_ARGS --json 2>&1) || {
-    log_error "List failed with output: $LIST_OUTPUT"
+GET_OUTPUT=$("$BINARY" profile-onu get "$PROFILE_NAME" $CMD_ARGS --json 2>&1) || {
+    log_error "Get failed with output: $GET_OUTPUT"
     exit 1
 }
 
-assert_json_valid "$LIST_OUTPUT"
-MATCH_COUNT=$(echo "$LIST_OUTPUT" | jq --arg name "$PROFILE_NAME" '[.[] | select(.name == $name)] | length')
-assert_equals "1" "$MATCH_COUNT" "Expected created profile to appear in list"
+assert_json_valid "$GET_OUTPUT"
+assert_json_value "$GET_OUTPUT" "name" "$PROFILE_NAME" "Profile name mismatch"
 
 DELETE_OUTPUT=$("$BINARY" profile-onu delete "$PROFILE_NAME" $CMD_ARGS 2>&1) || {
     log_error "Cleanup delete failed with output: $DELETE_OUTPUT"
