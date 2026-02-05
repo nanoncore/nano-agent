@@ -204,6 +204,24 @@ var (
 	onuRebootONUID   int
 )
 
+// Profile ONU create flags
+var (
+	profileONUPortEth               int
+	profileONUPortPots              int
+	profileONUPortIPHost            int
+	profileONUPortIPv6Host          int
+	profileONUPortVeip              int
+	profileONUTcontNum              int
+	profileONUGemportNum            int
+	profileONUSwitchNum             int
+	profileONUServiceAbility        string
+	profileONUOmciSendMode          string
+	profileONUExOMCI                bool
+	profileONUWifiMngViaNonOMCI     bool
+	profileONUDefaultMulticastRange string
+	profileONUDescription           string
+)
+
 // ONU update flags
 var (
 	onuUpdatePONPort        string
@@ -399,6 +417,50 @@ Examples:
 	RunE: runONUUpdate,
 }
 
+var profileONUCmd = &cobra.Command{
+	Use:   "profile-onu",
+	Short: "Manage ONU hardware profiles",
+	Long: `Manage ONU hardware profiles on the OLT.
+
+Supports listing, retrieving, creating, and deleting ONU hardware profiles.`,
+}
+
+var profileONUListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List ONU hardware profiles",
+	Long:  `List ONU hardware profiles available on the OLT.`,
+	RunE:  runProfileONUList,
+}
+
+var profileONUGetCmd = &cobra.Command{
+	Use:   "get <name>",
+	Short: "Get an ONU hardware profile by name",
+	Long:  `Retrieve details for a specific ONU hardware profile by name.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  runProfileONUGet,
+}
+
+var profileONUCreateCmd = &cobra.Command{
+	Use:   "create <name>",
+	Short: "Create an ONU hardware profile",
+	Long: `Create an ONU hardware profile with the provided fields.
+
+Example:
+  nano-agent profile-onu create AN5506-04-F1 \
+    --port-eth 4 --port-veip 1 --tcont-num 8 --gemport-num 32 \
+    --service-ability n:1 --description "AN5506-04-F 4-port GPON ONU"`,
+	Args: cobra.ExactArgs(1),
+	RunE: runProfileONUCreate,
+}
+
+var profileONUDeleteCmd = &cobra.Command{
+	Use:   "delete <name>",
+	Short: "Delete an ONU hardware profile",
+	Long:  `Delete an ONU hardware profile by name.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  runProfileONUDelete,
+}
+
 var portListCmd = &cobra.Command{
 	Use:   "port-list",
 	Short: "List all PON ports on an OLT",
@@ -490,6 +552,7 @@ func init() {
 	oltCommands := []*cobra.Command{
 		discoverCmd, diagnoseCmd, oltStatusCmd, oltAlarmsCmd, oltHealthCheckCmd, onuListCmd,
 		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
+		profileONUCmd, profileONUListCmd, profileONUGetCmd, profileONUCreateCmd, profileONUDeleteCmd,
 		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd, servicePortListCmd,
 	}
 	for _, cmd := range oltCommands {
@@ -578,6 +641,22 @@ func init() {
 	onuUpdateCmd.MarkFlagRequired("pon-port")
 	onuUpdateCmd.MarkFlagRequired("onu-id")
 
+	// Profile ONU create flags
+	profileONUCreateCmd.Flags().IntVar(&profileONUPortEth, "port-eth", 0, "Number of Ethernet ports (1-255)")
+	profileONUCreateCmd.Flags().IntVar(&profileONUPortPots, "port-pots", 0, "Number of POTS ports (1-255)")
+	profileONUCreateCmd.Flags().IntVar(&profileONUPortIPHost, "port-iphost", 0, "Number of IP host interfaces (1-255)")
+	profileONUCreateCmd.Flags().IntVar(&profileONUPortIPv6Host, "port-ipv6host", 0, "Number of IPv6 host interfaces (1-255)")
+	profileONUCreateCmd.Flags().IntVar(&profileONUPortVeip, "port-veip", 0, "Number of VEIP ports (1-255)")
+	profileONUCreateCmd.Flags().IntVar(&profileONUTcontNum, "tcont-num", 0, "Maximum TCONT count (1-255)")
+	profileONUCreateCmd.Flags().IntVar(&profileONUGemportNum, "gemport-num", 0, "Maximum GEMPORT count (1-255)")
+	profileONUCreateCmd.Flags().IntVar(&profileONUSwitchNum, "switch-num", 0, "ONU switch number")
+	profileONUCreateCmd.Flags().StringVar(&profileONUServiceAbility, "service-ability", "", "Service ability (e.g., n:1)")
+	profileONUCreateCmd.Flags().StringVar(&profileONUOmciSendMode, "omci-send-mode", "", "OMCI send mode (vendor-specific)")
+	profileONUCreateCmd.Flags().BoolVar(&profileONUExOMCI, "ex-omci", false, "Enable extended OMCI")
+	profileONUCreateCmd.Flags().BoolVar(&profileONUWifiMngViaNonOMCI, "wifi-mng-via-non-omci", false, "Enable WiFi management via non-OMCI")
+	profileONUCreateCmd.Flags().StringVar(&profileONUDefaultMulticastRange, "default-multicast-range", "", "Default multicast range")
+	profileONUCreateCmd.Flags().StringVar(&profileONUDescription, "description", "", "Profile description (max 64 chars)")
+
 	// Port enable flags
 	portEnableCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
 	portEnableCmd.MarkFlagRequired("pon-port")
@@ -610,6 +689,11 @@ func init() {
 	rootCmd.AddCommand(onuBulkProvisionCmd)
 	rootCmd.AddCommand(onuRebootCmd)
 	rootCmd.AddCommand(onuUpdateCmd)
+	rootCmd.AddCommand(profileONUCmd)
+	profileONUCmd.AddCommand(profileONUListCmd)
+	profileONUCmd.AddCommand(profileONUGetCmd)
+	profileONUCmd.AddCommand(profileONUCreateCmd)
+	profileONUCmd.AddCommand(profileONUDeleteCmd)
 	rootCmd.AddCommand(portListCmd)
 	rootCmd.AddCommand(portEnableCmd)
 	rootCmd.AddCommand(portDisableCmd)
@@ -2724,4 +2808,311 @@ func runServicePortList(cmd *cobra.Command, args []string) error {
 	w.Flush()
 
 	return nil
+}
+
+func runProfileONUList(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("ONU Profile List\n")
+		fmt.Printf("================\n\n")
+		fmt.Printf("OLT: %s (%s)\n\n", oltAddress, oltVendor)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	exec, ok := conn.driver.(types.CLIExecutor)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+	}
+
+	commands := []string{
+		"configure terminal",
+		"show profile onu",
+		"exit",
+	}
+	outputs, err := exec.ExecCommands(conn.ctx, commands)
+	if err != nil {
+		return fmt.Errorf("failed to list ONU profiles: %w", err)
+	}
+	showOutput := ""
+	if len(outputs) >= 2 {
+		showOutput = outputs[1]
+	}
+
+	if outputJSON {
+		payload := map[string]string{"output": showOutput}
+		data, _ := json.MarshalIndent(payload, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Print(showOutput)
+	return nil
+}
+
+func runProfileONUGet(cmd *cobra.Command, args []string) error {
+	name := args[0]
+
+	if !outputJSON {
+		fmt.Printf("ONU Profile Get\n")
+		fmt.Printf("===============\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Profile: %s\n\n", name)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	exec, ok := conn.driver.(types.CLIExecutor)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+	}
+
+	commands := []string{
+		"configure terminal",
+		fmt.Sprintf("show profile onu name %s", name),
+		"exit",
+	}
+	outputs, err := exec.ExecCommands(conn.ctx, commands)
+	if err != nil {
+		return fmt.Errorf("failed to get ONU profile: %w", err)
+	}
+	showOutput := ""
+	if len(outputs) >= 2 {
+		showOutput = outputs[1]
+	}
+
+	if outputJSON {
+		payload := map[string]string{"output": showOutput}
+		data, _ := json.MarshalIndent(payload, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Print(showOutput)
+	return nil
+}
+
+func runProfileONUCreate(cmd *cobra.Command, args []string) error {
+	name := args[0]
+
+	profile, err := buildProfileFromFlags(name)
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("ONU Profile Create\n")
+		fmt.Printf("==================\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Profile: %s\n\n", name)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	exec, ok := conn.driver.(types.CLIExecutor)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+	}
+
+	commands := buildProfileCreateCommands(profile)
+	outputs, err := exec.ExecCommands(conn.ctx, commands)
+	if err != nil {
+		return fmt.Errorf("failed to create ONU profile: %w", err)
+	}
+
+	if outputJSON {
+		payload := map[string]interface{}{
+			"commands": commands,
+			"output":   outputs,
+		}
+		data, _ := json.MarshalIndent(payload, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Println("Profile created. (If you didn't set any fields, defaults were used.)")
+	return nil
+}
+
+func runProfileONUDelete(cmd *cobra.Command, args []string) error {
+	name := args[0]
+
+	if !outputJSON {
+		fmt.Printf("ONU Profile Delete\n")
+		fmt.Printf("==================\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Profile: %s\n\n", name)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	exec, ok := conn.driver.(types.CLIExecutor)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support CLI execution", oltVendor)
+	}
+
+	commands := []string{
+		"configure terminal",
+		fmt.Sprintf("no profile onu name %s", name),
+		"exit",
+	}
+	outputs, err := exec.ExecCommands(conn.ctx, commands)
+	if err != nil {
+		return fmt.Errorf("failed to delete ONU profile: %w", err)
+	}
+
+	if outputJSON {
+		payload := map[string]interface{}{
+			"commands": commands,
+			"output":   outputs,
+		}
+		data, _ := json.MarshalIndent(payload, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	fmt.Println("Profile delete requested.")
+	return nil
+}
+
+func buildProfileFromFlags(name string) (*types.ONUHardwareProfile, error) {
+	profile := &types.ONUHardwareProfile{
+		Name: name,
+	}
+
+	if profileONUDescription != "" {
+		desc := profileONUDescription
+		profile.Description = &desc
+	}
+
+	if profileONUPortEth > 0 || profileONUPortPots > 0 || profileONUPortIPHost > 0 || profileONUPortIPv6Host > 0 || profileONUPortVeip > 0 {
+		profile.Ports = &types.ONUProfilePorts{}
+		if profileONUPortEth > 0 {
+			val := profileONUPortEth
+			profile.Ports.Eth = &val
+		}
+		if profileONUPortPots > 0 {
+			val := profileONUPortPots
+			profile.Ports.Pots = &val
+		}
+		if profileONUPortIPHost > 0 {
+			val := profileONUPortIPHost
+			profile.Ports.IPHost = &val
+		}
+		if profileONUPortIPv6Host > 0 {
+			val := profileONUPortIPv6Host
+			profile.Ports.IPv6Host = &val
+		}
+		if profileONUPortVeip > 0 {
+			val := profileONUPortVeip
+			profile.Ports.Veip = &val
+		}
+	}
+
+	if profileONUTcontNum > 0 {
+		val := profileONUTcontNum
+		profile.TcontNum = &val
+	}
+	if profileONUGemportNum > 0 {
+		val := profileONUGemportNum
+		profile.GemportNum = &val
+	}
+	if profileONUSwitchNum > 0 {
+		val := profileONUSwitchNum
+		profile.SwitchNum = &val
+	}
+	if profileONUServiceAbility != "" {
+		val := profileONUServiceAbility
+		profile.ServiceAbility = &val
+	}
+	if profileONUOmciSendMode != "" {
+		val := profileONUOmciSendMode
+		profile.OmciSendMode = &val
+	}
+	if profileONUExOMCI {
+		val := true
+		profile.ExOMCI = &val
+	}
+	if profileONUWifiMngViaNonOMCI {
+		val := true
+		profile.WifiMngViaNonOMCI = &val
+	}
+	if profileONUDefaultMulticastRange != "" {
+		val := profileONUDefaultMulticastRange
+		profile.DefaultMulticastRange = &val
+	}
+
+	if err := profile.Validate(); err != nil {
+		return nil, err
+	}
+	return profile, nil
+}
+
+func buildProfileCreateCommands(profile *types.ONUHardwareProfile) []string {
+	commands := []string{
+		"configure terminal",
+		fmt.Sprintf("profile onu name %s", profile.Name),
+	}
+
+	if profile.Ports != nil {
+		if profile.Ports.Eth != nil {
+			commands = append(commands, fmt.Sprintf("port-num eth %d", *profile.Ports.Eth))
+		}
+		if profile.Ports.Pots != nil {
+			commands = append(commands, fmt.Sprintf("port-num pots %d", *profile.Ports.Pots))
+		}
+		if profile.Ports.IPHost != nil {
+			commands = append(commands, fmt.Sprintf("port-num iphost %d", *profile.Ports.IPHost))
+		}
+		if profile.Ports.IPv6Host != nil {
+			commands = append(commands, fmt.Sprintf("port-num ipv6host %d", *profile.Ports.IPv6Host))
+		}
+		if profile.Ports.Veip != nil {
+			commands = append(commands, fmt.Sprintf("port-num veip %d", *profile.Ports.Veip))
+		}
+	}
+
+	if profile.TcontNum != nil && profile.GemportNum != nil {
+		commands = append(commands, fmt.Sprintf("tcont-num %d gemport-num %d", *profile.TcontNum, *profile.GemportNum))
+	}
+
+	if profile.SwitchNum != nil {
+		commands = append(commands, fmt.Sprintf("switch-num %d", *profile.SwitchNum))
+	}
+	if profile.ServiceAbility != nil {
+		commands = append(commands, fmt.Sprintf("service-ability %s", *profile.ServiceAbility))
+	}
+	if profile.OmciSendMode != nil {
+		commands = append(commands, fmt.Sprintf("omci-send-mode %s", *profile.OmciSendMode))
+	}
+	if profile.ExOMCI != nil && *profile.ExOMCI {
+		commands = append(commands, "ex-omci")
+	}
+	if profile.WifiMngViaNonOMCI != nil && *profile.WifiMngViaNonOMCI {
+		commands = append(commands, "wifi-mng-via-non-omci")
+	}
+	if profile.DefaultMulticastRange != nil {
+		commands = append(commands, fmt.Sprintf("default-multicast-range %s", *profile.DefaultMulticastRange))
+	}
+	if profile.Description != nil {
+		commands = append(commands, fmt.Sprintf("description %q", *profile.Description))
+	}
+
+	commands = append(commands, "commit", "exit", "exit")
+	return commands
 }
