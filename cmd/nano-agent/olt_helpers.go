@@ -1018,7 +1018,7 @@ func verifyONUProvision(ctx context.Context, driverV2 types.DriverV2, ponPort st
 		return onu != nil && onu.IsOnline, nil
 	}
 
-	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	err := verifyONUChange(ctx, verifyFunc, 6, 2*time.Second)
 	if err != nil {
 		if !outputJSON {
 			fmt.Printf("FAILED\n")
