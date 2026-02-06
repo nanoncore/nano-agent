@@ -222,6 +222,15 @@ var (
 	profileONUDescription           string
 )
 
+// Profile Line create flags
+var (
+	profileLineTconts       []string
+	profileLineGemports     []string
+	profileLineServices     []string
+	profileLineServicePorts []string
+	profileLineMvlans       []string
+)
+
 // ONU update flags
 var (
 	onuUpdatePONPort        string
@@ -461,6 +470,52 @@ var profileONUDeleteCmd = &cobra.Command{
 	RunE:  runProfileONUDelete,
 }
 
+var profileLineCmd = &cobra.Command{
+	Use:   "profile-line",
+	Short: "Manage line profiles",
+	Long: `Manage line profiles on the OLT.
+
+Supports listing, retrieving, creating, and deleting line profiles.`,
+}
+
+var profileLineListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List line profiles",
+	Long:  `List line profiles available on the OLT.`,
+	RunE:  runProfileLineList,
+}
+
+var profileLineGetCmd = &cobra.Command{
+	Use:   "get <name>",
+	Short: "Get a line profile by name",
+	Long:  `Retrieve details for a specific line profile by name.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  runProfileLineGet,
+}
+
+var profileLineCreateCmd = &cobra.Command{
+	Use:   "create <name>",
+	Short: "Create a line profile",
+	Long: `Create a line profile with the provided fields.
+
+Example:
+  nano-agent profile-line create line_vlan_100 \
+    --tcont "id=1,name=tcont_1,dba=default" \
+    --gemport "id=1,name=gemport_1,tcont=1,traffic-up=default,traffic-down=default" \
+    --service "name=INTERNET,gemport=1,vlan=100,cos=0-7" \
+    --service-port "id=1,gemport=1,uservlan=100,vlan=100"`,
+	Args: cobra.ExactArgs(1),
+	RunE: runProfileLineCreate,
+}
+
+var profileLineDeleteCmd = &cobra.Command{
+	Use:   "delete <name>",
+	Short: "Delete a line profile",
+	Long:  `Delete a line profile by name.`,
+	Args:  cobra.ExactArgs(1),
+	RunE:  runProfileLineDelete,
+}
+
 var portListCmd = &cobra.Command{
 	Use:   "port-list",
 	Short: "List all PON ports on an OLT",
@@ -657,6 +712,13 @@ func init() {
 	profileONUCreateCmd.Flags().StringVar(&profileONUDefaultMulticastRange, "default-multicast-range", "", "Default multicast range")
 	profileONUCreateCmd.Flags().StringVar(&profileONUDescription, "description", "", "Profile description (max 64 chars)")
 
+	// Profile Line create flags
+	profileLineCreateCmd.Flags().StringArrayVar(&profileLineTconts, "tcont", nil, "TCONT entry (e.g., id=1,name=tcont_1,dba=default)")
+	profileLineCreateCmd.Flags().StringArrayVar(&profileLineGemports, "gemport", nil, "GEM port entry (e.g., id=1,name=gemport_1,tcont=1,traffic-up=default,traffic-down=default)")
+	profileLineCreateCmd.Flags().StringArrayVar(&profileLineServices, "service", nil, "Service entry (e.g., name=INTERNET,gemport=1,vlan=100,cos=0-7)")
+	profileLineCreateCmd.Flags().StringArrayVar(&profileLineServicePorts, "service-port", nil, "Service-port entry (e.g., id=1,gemport=1,uservlan=100,vlan=100,admin-status=enable,description=foo)")
+	profileLineCreateCmd.Flags().StringArrayVar(&profileLineMvlans, "mvlan", nil, "Multicast VLANs (e.g., vlans=200,201 or raw=200-210)")
+
 	// Port enable flags
 	portEnableCmd.Flags().StringVar(&portPONPort, "pon-port", "", "PON port (e.g., 0/0/1) [required]")
 	portEnableCmd.MarkFlagRequired("pon-port")
@@ -694,6 +756,11 @@ func init() {
 	profileONUCmd.AddCommand(profileONUGetCmd)
 	profileONUCmd.AddCommand(profileONUCreateCmd)
 	profileONUCmd.AddCommand(profileONUDeleteCmd)
+	rootCmd.AddCommand(profileLineCmd)
+	profileLineCmd.AddCommand(profileLineListCmd)
+	profileLineCmd.AddCommand(profileLineGetCmd)
+	profileLineCmd.AddCommand(profileLineCreateCmd)
+	profileLineCmd.AddCommand(profileLineDeleteCmd)
 	rootCmd.AddCommand(portListCmd)
 	rootCmd.AddCommand(portEnableCmd)
 	rootCmd.AddCommand(portDisableCmd)
@@ -2973,6 +3040,163 @@ func runProfileONUDelete(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runProfileLineList(cmd *cobra.Command, args []string) error {
+	if !outputJSON {
+		fmt.Printf("Line Profile List\n")
+		fmt.Printf("=================\n\n")
+		fmt.Printf("OLT: %s (%s)\n\n", oltAddress, oltVendor)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	manager, ok := conn.driver.(types.LineProfileManager)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support line profile operations", oltVendor)
+	}
+
+	profiles, err := manager.ListLineProfiles(conn.ctx)
+	if err != nil {
+		return err
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(profiles, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if len(profiles) == 0 {
+		fmt.Println("No profiles found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "Name\tID\tTconts\tGemports\tServices\tServicePorts\tCommit")
+	fmt.Fprintln(w, "----\t--\t------\t--------\t--------\t------------\t------")
+	for _, p := range profiles {
+		id := "-"
+		if p.ID != nil {
+			id = fmt.Sprintf("%d", *p.ID)
+		}
+		tconts, gemports, services, servicePorts := countLineProfileEntries(p)
+		commit := "-"
+		if p.Committed != nil {
+			if *p.Committed {
+				commit = "yes"
+			} else {
+				commit = "no"
+			}
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\t%d\t%s\n",
+			p.Name, id, tconts, gemports, services, servicePorts, commit)
+	}
+	w.Flush()
+	return nil
+}
+
+func runProfileLineGet(cmd *cobra.Command, args []string) error {
+	name := args[0]
+
+	if !outputJSON {
+		fmt.Printf("Line Profile Get\n")
+		fmt.Printf("===============\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Profile: %s\n\n", name)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	manager, ok := conn.driver.(types.LineProfileManager)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support line profile operations", oltVendor)
+	}
+
+	profile, err := manager.GetLineProfile(conn.ctx, name)
+	if err != nil {
+		return err
+	}
+
+	if outputJSON {
+		data, _ := json.MarshalIndent(profile, "", "  ")
+		fmt.Println(string(data))
+		return nil
+	}
+
+	printLineProfile(profile)
+	return nil
+}
+
+func runProfileLineCreate(cmd *cobra.Command, args []string) error {
+	name := args[0]
+
+	profile, err := buildLineProfileFromFlags(name)
+	if err != nil {
+		return err
+	}
+
+	if !outputJSON {
+		fmt.Printf("Line Profile Create\n")
+		fmt.Printf("===================\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Profile: %s\n\n", name)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	manager, ok := conn.driver.(types.LineProfileManager)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support line profile operations", oltVendor)
+	}
+
+	if err := manager.CreateLineProfile(conn.ctx, profile); err != nil {
+		return err
+	}
+
+	fmt.Println("Profile created.")
+	return nil
+}
+
+func runProfileLineDelete(cmd *cobra.Command, args []string) error {
+	name := args[0]
+
+	if !outputJSON {
+		fmt.Printf("Line Profile Delete\n")
+		fmt.Printf("===================\n\n")
+		fmt.Printf("OLT: %s (%s)\n", oltAddress, oltVendor)
+		fmt.Printf("Profile: %s\n\n", name)
+	}
+
+	conn, err := connectToOLT(60)
+	if err != nil {
+		return err
+	}
+	defer conn.close()
+
+	manager, ok := conn.driver.(types.LineProfileManager)
+	if !ok {
+		return fmt.Errorf("driver for vendor %s does not support line profile operations", oltVendor)
+	}
+
+	if err := manager.DeleteLineProfile(conn.ctx, name); err != nil {
+		return err
+	}
+
+	fmt.Println("Profile delete requested.")
+	return nil
+}
+
 func buildProfileFromFlags(name string) (*types.ONUHardwareProfile, error) {
 	profile := &types.ONUHardwareProfile{
 		Name: name,
@@ -3046,6 +3270,197 @@ func buildProfileFromFlags(name string) (*types.ONUHardwareProfile, error) {
 	return profile, nil
 }
 
+func buildLineProfileFromFlags(name string) (*types.LineProfile, error) {
+	profile := &types.LineProfile{Name: name}
+
+	tconts := map[int]*types.LineProfileTcont{}
+	for _, raw := range profileLineTconts {
+		kv, _, err := parseKeyValueMap(raw, false)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --tcont %q: %w", raw, err)
+		}
+		id, err := parseRequiredInt(kv, "id")
+		if err != nil {
+			return nil, fmt.Errorf("invalid --tcont %q: %w", raw, err)
+		}
+		tcont := &types.LineProfileTcont{ID: id}
+		if val := kv["name"]; val != "" {
+			tcont.Name = val
+		}
+		if val := kv["dba"]; val != "" {
+			tcont.DBA = val
+		}
+		tconts[id] = tcont
+	}
+
+	gemports := map[int]*types.LineProfileGemport{}
+	for _, raw := range profileLineGemports {
+		kv, _, err := parseKeyValueMap(raw, false)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --gemport %q: %w", raw, err)
+		}
+		id, err := parseRequiredInt(kv, "id")
+		if err != nil {
+			return nil, fmt.Errorf("invalid --gemport %q: %w", raw, err)
+		}
+		tcontID, err := parseRequiredInt(kv, "tcont")
+		if err != nil {
+			return nil, fmt.Errorf("invalid --gemport %q: %w", raw, err)
+		}
+		gem := &types.LineProfileGemport{
+			ID:      id,
+			TcontID: tcontID,
+		}
+		if val := kv["name"]; val != "" {
+			gem.Name = val
+		}
+		if val := kv["traffic-up"]; val != "" {
+			gem.TrafficLimitUp = val
+		}
+		if val := kv["traffic-down"]; val != "" {
+			gem.TrafficLimitDn = val
+		}
+		if val := kv["encrypt"]; val != "" {
+			parsed, err := parseBoolValue(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --gemport %q: %w", raw, err)
+			}
+			gem.Encrypt = &parsed
+		}
+		if val := kv["state"]; val != "" {
+			gem.State = val
+		}
+		if val := kv["down-queue-map-id"]; val != "" {
+			parsed, err := strconv.Atoi(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --gemport %q: down-queue-map-id must be an integer", raw)
+			}
+			gem.DownQueueMapID = &parsed
+		}
+		gemports[id] = gem
+	}
+
+	for _, raw := range profileLineServices {
+		kv, _, err := parseKeyValueMap(raw, false)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --service %q: %w", raw, err)
+		}
+		name, ok := kv["name"]
+		if !ok || name == "" {
+			return nil, fmt.Errorf("invalid --service %q: name is required", raw)
+		}
+		gemportID, err := parseRequiredInt(kv, "gemport")
+		if err != nil {
+			return nil, fmt.Errorf("invalid --service %q: %w", raw, err)
+		}
+		gem, ok := gemports[gemportID]
+		if !ok {
+			return nil, fmt.Errorf("invalid --service %q: gemport %d not defined", raw, gemportID)
+		}
+		service := &types.LineProfileService{
+			Name:      name,
+			GemportID: gemportID,
+		}
+		if val := kv["vlan"]; val != "" {
+			parsed, err := strconv.Atoi(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --service %q: vlan must be an integer", raw)
+			}
+			service.VLAN = parsed
+		}
+		if val := kv["cos"]; val != "" {
+			if err := types.ValidateCOS(val); err != nil {
+				return nil, fmt.Errorf("invalid --service %q: %w", raw, err)
+			}
+			service.COS = val
+		}
+		gem.Services = append(gem.Services, service)
+	}
+
+	for _, raw := range profileLineServicePorts {
+		kv, _, err := parseKeyValueMap(raw, false)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --service-port %q: %w", raw, err)
+		}
+		id, err := parseRequiredInt(kv, "id")
+		if err != nil {
+			return nil, fmt.Errorf("invalid --service-port %q: %w", raw, err)
+		}
+		gemportID, err := parseRequiredInt(kv, "gemport")
+		if err != nil {
+			return nil, fmt.Errorf("invalid --service-port %q: %w", raw, err)
+		}
+		gem, ok := gemports[gemportID]
+		if !ok {
+			return nil, fmt.Errorf("invalid --service-port %q: gemport %d not defined", raw, gemportID)
+		}
+		sp := &types.LineProfileServicePort{
+			ID:        id,
+			GemportID: gemportID,
+		}
+		if val := kv["uservlan"]; val != "" {
+			parsed, err := strconv.Atoi(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --service-port %q: uservlan must be an integer", raw)
+			}
+			sp.UserVLAN = parsed
+		}
+		if val := kv["vlan"]; val != "" {
+			parsed, err := strconv.Atoi(val)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --service-port %q: vlan must be an integer", raw)
+			}
+			sp.VLAN = parsed
+		}
+		if val := kv["admin-status"]; val != "" {
+			sp.AdminStatus = val
+		}
+		if val := kv["description"]; val != "" {
+			sp.Description = val
+		}
+		gem.ServicePorts = append(gem.ServicePorts, sp)
+	}
+
+	for _, gem := range gemports {
+		tcont, ok := tconts[gem.TcontID]
+		if !ok {
+			return nil, fmt.Errorf("gemport %d references unknown tcont %d", gem.ID, gem.TcontID)
+		}
+		tcont.Gemports = append(tcont.Gemports, gem)
+	}
+
+	if len(profileLineMvlans) > 1 {
+		return nil, fmt.Errorf("only one --mvlan is supported")
+	}
+	if len(profileLineMvlans) == 1 {
+		kv, bare, err := parseKeyValueMap(profileLineMvlans[0], true)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --mvlan %q: %w", profileLineMvlans[0], err)
+		}
+		mvlan := &types.LineProfileMvlan{}
+		if val := kv["vlans"]; val != "" {
+			mvlan.Raw = val
+		} else if val := kv["raw"]; val != "" {
+			mvlan.Raw = val
+		} else if bare != "" {
+			mvlan.Raw = bare
+		}
+		profile.Mvlan = mvlan
+	}
+
+	if len(tconts) > 0 {
+		profile.Tconts = make([]*types.LineProfileTcont, 0, len(tconts))
+		for _, tcont := range tconts {
+			profile.Tconts = append(profile.Tconts, tcont)
+		}
+	}
+
+	if err := profile.Validate(); err != nil {
+		return nil, err
+	}
+	return profile, nil
+}
+
 func formatOptionalValue(value *int) string {
 	if value == nil {
 		return "-"
@@ -3109,5 +3524,156 @@ func printONUProfile(profile *types.ONUHardwareProfile) {
 	}
 	if profile.Committed != nil {
 		fmt.Printf("Committed: %t\n", *profile.Committed)
+	}
+}
+
+func countLineProfileEntries(profile *types.LineProfile) (int, int, int, int) {
+	if profile == nil {
+		return 0, 0, 0, 0
+	}
+	tconts := len(profile.Tconts)
+	gemports := 0
+	services := 0
+	servicePorts := 0
+	for _, tcont := range profile.Tconts {
+		if tcont == nil {
+			continue
+		}
+		for _, gem := range tcont.Gemports {
+			if gem == nil {
+				continue
+			}
+			gemports++
+			services += len(gem.Services)
+			servicePorts += len(gem.ServicePorts)
+		}
+	}
+	return tconts, gemports, services, servicePorts
+}
+
+func printLineProfile(profile *types.LineProfile) {
+	if profile == nil {
+		fmt.Println("Profile not found.")
+		return
+	}
+
+	fmt.Printf("Name: %s\n", profile.Name)
+	if profile.ID != nil {
+		fmt.Printf("ID: %d\n", *profile.ID)
+	}
+	if profile.Committed != nil {
+		fmt.Printf("Committed: %t\n", *profile.Committed)
+	}
+	if profile.Mvlan != nil {
+		if len(profile.Mvlan.VLANs) > 0 {
+			fmt.Printf("MVLAN: %v\n", profile.Mvlan.VLANs)
+		} else if profile.Mvlan.Raw != "" {
+			fmt.Printf("MVLAN: %s\n", profile.Mvlan.Raw)
+		}
+	}
+	for _, tcont := range profile.Tconts {
+		if tcont == nil {
+			continue
+		}
+		fmt.Printf("TCONT %d", tcont.ID)
+		if tcont.Name != "" {
+			fmt.Printf(" name=%s", tcont.Name)
+		}
+		if tcont.DBA != "" {
+			fmt.Printf(" dba=%s", tcont.DBA)
+		}
+		fmt.Println()
+		for _, gem := range tcont.Gemports {
+			if gem == nil {
+				continue
+			}
+			fmt.Printf("  GEMPORT %d tcont=%d", gem.ID, gem.TcontID)
+			if gem.Name != "" {
+				fmt.Printf(" name=%s", gem.Name)
+			}
+			if gem.TrafficLimitUp != "" || gem.TrafficLimitDn != "" {
+				fmt.Printf(" traffic=%s/%s", gem.TrafficLimitUp, gem.TrafficLimitDn)
+			}
+			if gem.Encrypt != nil {
+				fmt.Printf(" encrypt=%t", *gem.Encrypt)
+			}
+			if gem.State != "" {
+				fmt.Printf(" state=%s", gem.State)
+			}
+			if gem.DownQueueMapID != nil {
+				fmt.Printf(" down-queue-map-id=%d", *gem.DownQueueMapID)
+			}
+			fmt.Println()
+			for _, service := range gem.Services {
+				if service == nil {
+					continue
+				}
+				fmt.Printf("    SERVICE %s gemport=%d vlan=%d", service.Name, service.GemportID, service.VLAN)
+				if service.COS != "" {
+					fmt.Printf(" cos=%s", service.COS)
+				}
+				fmt.Println()
+			}
+			for _, sp := range gem.ServicePorts {
+				if sp == nil {
+					continue
+				}
+				fmt.Printf("    SERVICE-PORT %d gemport=%d uservlan=%d vlan=%d", sp.ID, sp.GemportID, sp.UserVLAN, sp.VLAN)
+				if sp.AdminStatus != "" {
+					fmt.Printf(" admin-status=%s", sp.AdminStatus)
+				}
+				if sp.Description != "" {
+					fmt.Printf(" description=%s", sp.Description)
+				}
+				fmt.Println()
+			}
+		}
+	}
+}
+
+func parseKeyValueMap(raw string, allowBare bool) (map[string]string, string, error) {
+	fields := strings.Split(raw, ",")
+	kv := make(map[string]string, len(fields))
+	var bareParts []string
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		parts := strings.SplitN(field, "=", 2)
+		if len(parts) != 2 {
+			if allowBare {
+				bareParts = append(bareParts, field)
+				continue
+			}
+			return nil, "", fmt.Errorf("expected key=value, got %q", field)
+		}
+		key := strings.ToLower(strings.TrimSpace(parts[0]))
+		val := strings.TrimSpace(parts[1])
+		kv[key] = val
+	}
+	return kv, strings.Join(bareParts, ","), nil
+}
+
+func parseRequiredInt(kv map[string]string, key string) (int, error) {
+	val, ok := kv[key]
+	if !ok || val == "" {
+		return 0, fmt.Errorf("%s is required", key)
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer", key)
+	}
+	return parsed, nil
+}
+
+func parseBoolValue(val string) (bool, error) {
+	switch strings.ToLower(val) {
+	case "enable", "enabled", "true", "yes", "1":
+		return true, nil
+	case "disable", "disabled", "false", "no", "0":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean %q", val)
 	}
 }
