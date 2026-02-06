@@ -608,6 +608,7 @@ func init() {
 		discoverCmd, diagnoseCmd, oltStatusCmd, oltAlarmsCmd, oltHealthCheckCmd, onuListCmd,
 		onuInfoCmd, onuProvisionCmd, onuDeleteCmd, onuSuspendCmd, onuResumeCmd, onuBulkProvisionCmd, onuRebootCmd, onuUpdateCmd,
 		profileONUCmd, profileONUListCmd, profileONUGetCmd, profileONUCreateCmd, profileONUDeleteCmd,
+		profileLineCmd, profileLineListCmd, profileLineGetCmd, profileLineCreateCmd, profileLineDeleteCmd,
 		portListCmd, portEnableCmd, portDisableCmd, portPowerCmd, servicePortListCmd,
 	}
 	for _, cmd := range oltCommands {
