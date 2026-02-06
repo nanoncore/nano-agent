@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -2902,7 +2903,10 @@ func runProfileONUList(cmd *cobra.Command, args []string) error {
 	}
 
 	if outputJSON {
-		data, _ := json.MarshalIndent(profiles, "", "  ")
+		data, err := json.MarshalIndent(profiles, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal line profiles: %w", err)
+		}
 		fmt.Println(string(data))
 		return nil
 	}
@@ -2969,7 +2973,10 @@ func runProfileONUGet(cmd *cobra.Command, args []string) error {
 	}
 
 	if outputJSON {
-		data, _ := json.MarshalIndent(profile, "", "  ")
+		data, err := json.MarshalIndent(profile, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal line profile: %w", err)
+		}
 		fmt.Println(string(data))
 		return nil
 	}
@@ -3293,6 +3300,11 @@ func buildLineProfileFromFlags(name string) (*types.LineProfile, error) {
 		}
 		tconts[id] = tcont
 	}
+	tcontIDs := make([]int, 0, len(tconts))
+	for id := range tconts {
+		tcontIDs = append(tcontIDs, id)
+	}
+	sort.Ints(tcontIDs)
 
 	gemports := map[int]*types.LineProfileGemport{}
 	for _, raw := range profileLineGemports {
@@ -3340,6 +3352,11 @@ func buildLineProfileFromFlags(name string) (*types.LineProfile, error) {
 		}
 		gemports[id] = gem
 	}
+	gemportIDs := make([]int, 0, len(gemports))
+	for id := range gemports {
+		gemportIDs = append(gemportIDs, id)
+	}
+	sort.Ints(gemportIDs)
 
 	for _, raw := range profileLineServices {
 		kv, _, err := parseKeyValueMap(raw, false)
@@ -3422,7 +3439,8 @@ func buildLineProfileFromFlags(name string) (*types.LineProfile, error) {
 		gem.ServicePorts = append(gem.ServicePorts, sp)
 	}
 
-	for _, gem := range gemports {
+	for _, id := range gemportIDs {
+		gem := gemports[id]
 		tcont, ok := tconts[gem.TcontID]
 		if !ok {
 			return nil, fmt.Errorf("gemport %d references unknown tcont %d", gem.ID, gem.TcontID)
@@ -3451,8 +3469,8 @@ func buildLineProfileFromFlags(name string) (*types.LineProfile, error) {
 
 	if len(tconts) > 0 {
 		profile.Tconts = make([]*types.LineProfileTcont, 0, len(tconts))
-		for _, tcont := range tconts {
-			profile.Tconts = append(profile.Tconts, tcont)
+		for _, id := range tcontIDs {
+			profile.Tconts = append(profile.Tconts, tconts[id])
 		}
 	}
 
