@@ -1805,7 +1805,7 @@ func runONUProvision(cmd *cobra.Command, args []string) error {
 	}
 
 	// Detect line profile usage for two-step provisioning (NAN-258)
-	usesLineProfile := onuProvLineProfile != "" && strings.Contains(onuProvLineProfile, "line")
+	usesLineProfile := onuProvLineProfile != ""
 
 	if usesLineProfile && !outputJSON {
 		fmt.Printf("Using line profile provisioning (two-step)\n\n")
@@ -1911,21 +1911,66 @@ func executeProvision(ctx context.Context, driver types.Driver, subscriber *mode
 		return result, nil
 	}
 
-	// Extract PON port and ONU ID from subscriber annotations
+	// Extract PON port and ONU ID from annotations or result metadata
 	ponPort := subscriber.Annotations["nano.io/pon-port"]
 	onuIDStr := subscriber.Annotations["nano.io/onu-id"]
-	if ponPort == "" || onuIDStr == "" {
-		// Can't verify without location info, skip
-		return result, nil
+	var onuID int
+	if onuIDStr != "" {
+		if parsed, parseErr := strconv.Atoi(onuIDStr); parseErr == nil {
+			onuID = parsed
+		}
 	}
-	onuID, err := strconv.Atoi(onuIDStr)
-	if err != nil {
-		return result, nil // Skip verification if ONU ID invalid
+	if ponPort == "" && result != nil && result.Metadata != nil {
+		if v, ok := result.Metadata["pon_port"].(string); ok {
+			ponPort = v
+		}
+	}
+	if onuID == 0 && result != nil && result.Metadata != nil {
+		switch v := result.Metadata["onu_id"].(type) {
+		case int:
+			onuID = v
+		case int32:
+			onuID = int(v)
+		case int64:
+			onuID = int(v)
+		case float64:
+			onuID = int(v)
+		case string:
+			if parsed, parseErr := strconv.Atoi(v); parseErr == nil {
+				onuID = parsed
+			}
+		}
+	}
+	if ponPort == "" || onuID == 0 {
+		// Attempt serial lookup for auto-assigned ONU IDs
+		if subscriber.Spec.ONUSerial != "" {
+			if onu, lookupErr := lookupONUBySerial(ctx, driverV2, subscriber.Spec.ONUSerial); lookupErr == nil && onu != nil {
+				ponPort = onu.PONPort
+				onuID = onu.ONUID
+			}
+		}
+	}
+	if ponPort == "" || onuID == 0 {
+		// Can't verify without location info
+		return result, nil
 	}
 
 	// Verify ONU provisioning (NAN-258)
 	if err := verifyONUProvision(ctx, driverV2, ponPort, onuID); err != nil {
-		return nil, fmt.Errorf("provisioning verification failed: %w", err)
+		// Retry by resolving ONU ID via serial in case of auto-assign mismatch
+		if subscriber.Spec.ONUSerial != "" {
+			if onu, lookupErr := lookupONUBySerial(ctx, driverV2, subscriber.Spec.ONUSerial); lookupErr == nil && onu != nil {
+				ponPort = onu.PONPort
+				onuID = onu.ONUID
+				if retryErr := verifyONUProvision(ctx, driverV2, ponPort, onuID); retryErr != nil {
+					return nil, fmt.Errorf("provisioning verification failed: %w", retryErr)
+				}
+			} else {
+				return nil, fmt.Errorf("provisioning verification failed: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("provisioning verification failed: %w", err)
+		}
 	}
 
 	// If using line profile, verify line profile association (NAN-258)

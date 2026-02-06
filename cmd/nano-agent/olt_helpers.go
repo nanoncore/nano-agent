@@ -1110,6 +1110,9 @@ func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, 
 			return false, nil // Config fetch failed, retry
 		}
 		// Check if line profile is in the running config
+		if strings.Contains(config, fmt.Sprintf("profile line name %s", lineProfile)) {
+			return true, nil
+		}
 		return strings.Contains(config, fmt.Sprintf("profile line %s", lineProfile)), nil
 	}
 
