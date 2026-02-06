@@ -66,5 +66,12 @@ DELETE_OUTPUT=$("$BINARY" profile-line delete "$PROFILE_NAME" $CMD_ARGS 2>&1) ||
 
 assert_contains "$DELETE_OUTPUT" "Profile delete requested" "Expected delete success message"
 
+GET_OUTPUT=$("$BINARY" profile-line get "$PROFILE_NAME" $CMD_ARGS --json 2>&1) && {
+    log_error "Expected get to fail after delete, but it succeeded"
+    log_error "Get output: $GET_OUTPUT"
+    exit 1
+}
+assert_contains "$GET_OUTPUT" "not found" "Expected not found after delete"
+
 log_success "profile-line delete test passed for $VENDOR"
 exit 0
