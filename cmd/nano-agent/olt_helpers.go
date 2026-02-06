@@ -1109,7 +1109,11 @@ func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, 
 		if err != nil {
 			return false, nil // Config fetch failed, retry
 		}
-		// Check if line profile is in the running config
+		// Check if line profile is bound to the expected ONU ID
+		if strings.Contains(config, fmt.Sprintf("onu %d profile line name %s", onuID, lineProfile)) {
+			return true, nil
+		}
+		// Fallback for partial configs
 		if strings.Contains(config, fmt.Sprintf("profile line name %s", lineProfile)) {
 			return true, nil
 		}
