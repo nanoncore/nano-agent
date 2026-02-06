@@ -44,7 +44,7 @@ if [[ -n "$COMMUNITY" ]]; then
     CMD_ARGS="$CMD_ARGS --community $COMMUNITY"
 fi
 
-PROFILE_NAME="line_vlan_100"
+PROFILE_NAME="line_vlan_999"
 
 OUTPUT=$("$BINARY" profile-line get "$PROFILE_NAME" $CMD_ARGS --json 2>&1) || {
     log_error "Command failed with output: $OUTPUT"
@@ -53,6 +53,9 @@ OUTPUT=$("$BINARY" profile-line get "$PROFILE_NAME" $CMD_ARGS --json 2>&1) || {
 
 assert_json_valid "$OUTPUT"
 assert_json_value "$OUTPUT" "name" "$PROFILE_NAME" "Profile name mismatch"
+assert_json_array_not_empty "$OUTPUT" ".tconts" "Expected tconts to be present"
+assert_not_empty "$(echo "$OUTPUT" | jq -r '.tconts[0].name')" "Expected tcont name"
+assert_json_array_not_empty "$OUTPUT" ".tconts[0].gemports" "Expected gemports to be present"
 
 log_success "profile-line get test passed for $VENDOR"
 exit 0
