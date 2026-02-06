@@ -50,7 +50,11 @@ OUTPUT=$("$BINARY" profile-line list $CMD_ARGS --json 2>&1) || {
 }
 
 assert_json_valid "$OUTPUT"
+JSON_TYPE=$(echo "$OUTPUT" | jq -r 'type')
+assert_equals "array" "$JSON_TYPE" "Expected JSON array output"
 assert_json_array_not_empty "$OUTPUT" "." "Expected profile list to be non-empty"
+assert_not_empty "$(echo "$OUTPUT" | jq -r '.[0].name')" "Expected first profile to have a name"
+assert_not_empty "$(echo "$OUTPUT" | jq -r '.[0].id')" "Expected first profile to have an id"
 
 log_success "profile-line list test passed for $VENDOR"
 exit 0
