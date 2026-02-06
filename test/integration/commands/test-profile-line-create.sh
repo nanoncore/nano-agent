@@ -67,6 +67,9 @@ GET_OUTPUT=$("$BINARY" profile-line get "$PROFILE_NAME" $CMD_ARGS --json 2>&1) |
 
 assert_json_valid "$GET_OUTPUT"
 assert_json_value "$GET_OUTPUT" "name" "$PROFILE_NAME" "Profile name mismatch"
+assert_json_array_not_empty "$GET_OUTPUT" ".tconts" "Expected tconts to be present"
+assert_not_empty "$(echo "$GET_OUTPUT" | jq -r '.tconts[0].name')" "Expected tcont name"
+assert_json_array_not_empty "$GET_OUTPUT" ".tconts[0].gemports" "Expected gemports to be present"
 
 DELETE_OUTPUT=$("$BINARY" profile-line delete "$PROFILE_NAME" $CMD_ARGS 2>&1) || {
     log_error "Cleanup delete failed with output: $DELETE_OUTPUT"
