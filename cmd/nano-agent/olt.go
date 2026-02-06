@@ -1985,8 +1985,15 @@ func executeProvision(ctx context.Context, driver types.Driver, subscriber *mode
 
 	// Verify VLAN if specified (NAN-258)
 	if subscriber.Spec.VLAN > 0 {
-		if err := verifyVLANUpdate(ctx, driverV2, ponPort, onuID, subscriber.Spec.VLAN); err != nil {
-			return nil, fmt.Errorf("VLAN verification failed: %w", err)
+		// Line profiles manage VLAN via service-port; SNMP verification can lag or be unsupported.
+		if usesLineProfile {
+			if !outputJSON {
+				fmt.Printf("Skipping VLAN verification (line profile manages VLAN)\n")
+			}
+		} else {
+			if err := verifyVLANUpdate(ctx, driverV2, ponPort, onuID, subscriber.Spec.VLAN); err != nil {
+				return nil, fmt.Errorf("VLAN verification failed: %w", err)
+			}
 		}
 	}
 
