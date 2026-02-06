@@ -375,7 +375,7 @@ func printONUSummary(onu *types.ONUInfo) {
 // =============================================================================
 
 // printProvisionHeader prints the provision command header
-func printProvisionHeader(dryRun bool, serial string, vlan, bwDown, bwUp int, ponPort string, onuID int, lineProfile, srvProfile string) {
+func printProvisionHeader(dryRun bool, serial string, vlan, bwDown, bwUp int, ponPort string, onuID int, lineProfile, srvProfile, onuProfile string) {
 	if outputJSON {
 		return
 	}
@@ -401,6 +401,9 @@ func printProvisionHeader(dryRun bool, serial string, vlan, bwDown, bwUp int, po
 	}
 	if srvProfile != "" {
 		fmt.Printf("Service Profile: %s\n", srvProfile)
+	}
+	if onuProfile != "" {
+		fmt.Printf("ONU Profile: %s\n", onuProfile)
 	}
 	fmt.Println()
 }

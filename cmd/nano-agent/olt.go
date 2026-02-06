@@ -166,6 +166,7 @@ var (
 	onuProvBandwidthDn int
 	onuProvLineProfile string
 	onuProvSrvProfile  string
+	onuProvONUProfile  string
 	onuProvDescription string
 	onuProvDryRun      bool
 	onuProvForce       bool
@@ -655,6 +656,7 @@ func init() {
 	onuProvisionCmd.Flags().IntVar(&onuProvBandwidthUp, "bandwidth-up", 50, "Upload bandwidth in Mbps")
 	onuProvisionCmd.Flags().StringVar(&onuProvLineProfile, "line-profile", "", "Line profile name")
 	onuProvisionCmd.Flags().StringVar(&onuProvSrvProfile, "service-profile", "", "Service profile name")
+	onuProvisionCmd.Flags().StringVar(&onuProvONUProfile, "onu-profile", "", "ONU hardware profile name")
 	onuProvisionCmd.Flags().StringVar(&onuProvDescription, "description", "", "Subscriber description")
 	onuProvisionCmd.Flags().BoolVar(&onuProvDryRun, "dry-run", false, "Preview the operation without making changes")
 	onuProvisionCmd.Flags().BoolVar(&onuProvForce, "force", false, "Force direct VLAN config (unbind profile if mismatch)")
@@ -1810,7 +1812,7 @@ func runONUProvision(cmd *cobra.Command, args []string) error {
 	}
 
 	printProvisionHeader(onuProvDryRun, onuProvSerial, onuProvVLAN, onuProvBandwidthDn, onuProvBandwidthUp,
-		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile)
+		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile, onuProvONUProfile)
 
 	subscriber, tier := buildProvisionModels()
 
@@ -1854,6 +1856,9 @@ func buildProvisionModels() (*model.Subscriber, *model.ServiceTier) {
 	}
 	if onuProvSrvProfile != "" {
 		subscriber.Annotations["nano.io/service-profile"] = onuProvSrvProfile
+	}
+	if onuProvONUProfile != "" {
+		subscriber.Annotations["nano.io/onu-profile"] = onuProvONUProfile
 	}
 
 	tier := &model.ServiceTier{

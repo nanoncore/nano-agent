@@ -23,8 +23,9 @@ type ONUProvisionRequest struct {
 	ServicePorts   []ServicePortSpec `json:"service_ports,omitempty"`
 	NativeVLAN     int               `json:"native_vlan,omitempty"`
 	AllowedVLANs   []int             `json:"allowed_vlans,omitempty"`
-	LineProfile    string            `json:"line_profile,omitempty"`    // Huawei-specific
-	ServiceProfile string            `json:"service_profile,omitempty"` // Huawei-specific
+	ONUProfile     string            `json:"onu_profile,omitempty"`     // V-SOL hardware profile
+	LineProfile    string            `json:"line_profile,omitempty"`    // Huawei/V-SOL line profile
+	ServiceProfile string            `json:"service_profile,omitempty"` // Huawei service profile
 }
 
 // ServicePortSpec defines a service port configuration.
