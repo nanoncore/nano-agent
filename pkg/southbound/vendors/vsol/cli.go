@@ -121,7 +121,7 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		// Use explicit ONU ID with onu add command (requires profile)
 		profile := req.ONUProfile
 		if profile == "" {
-			profile = "AN5506-04-F1"
+			return fmt.Errorf("ONU profile is required when specifying an ONU ID")
 		}
 		cmd = fmt.Sprintf("onu add %d profile %s sn %s", req.OnuID, profile, req.SerialNumber)
 		output, err = d.Execute(ctx, cmd)

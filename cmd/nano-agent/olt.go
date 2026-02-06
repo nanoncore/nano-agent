@@ -1926,19 +1926,8 @@ func executeProvision(ctx context.Context, driver types.Driver, subscriber *mode
 		}
 	}
 	if onuID == 0 && result != nil && result.Metadata != nil {
-		switch v := result.Metadata["onu_id"].(type) {
-		case int:
-			onuID = v
-		case int32:
-			onuID = int(v)
-		case int64:
-			onuID = int(v)
-		case float64:
-			onuID = int(v)
-		case string:
-			if parsed, parseErr := strconv.Atoi(v); parseErr == nil {
-				onuID = parsed
-			}
+		if parsed, ok := parseMetadataInt(result.Metadata, "onu_id"); ok {
+			onuID = parsed
 		}
 	}
 	if ponPort == "" || onuID == 0 {

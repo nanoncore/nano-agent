@@ -1117,7 +1117,8 @@ func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, 
 		if strings.Contains(config, fmt.Sprintf("profile line name %s", lineProfile)) {
 			return true, nil
 		}
-		return strings.Contains(config, fmt.Sprintf("profile line %s", lineProfile)), nil
+		pattern := fmt.Sprintf(`profile line id \d+ name %s`, regexp.QuoteMeta(lineProfile))
+		return regexp.MustCompile(pattern).MatchString(config), nil
 	}
 
 	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
@@ -1132,6 +1133,31 @@ func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, 
 		fmt.Printf("OK\n")
 	}
 	return nil
+}
+
+func parseMetadataInt(metadata map[string]any, key string) (int, bool) {
+	if metadata == nil {
+		return 0, false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case string:
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 // verifyONUDeletion verifies that an ONU was successfully deleted
