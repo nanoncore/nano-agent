@@ -444,6 +444,11 @@ func (e *Executor) handleONUProvision(ctx context.Context, driver cli.CLIDriver,
 		lineProfile, _ = cmd.Payload["line_profile"].(string)
 	}
 
+	onuProfile, _ := cmd.Payload["onuProfile"].(string)
+	if onuProfile == "" {
+		onuProfile, _ = cmd.Payload["onu_profile"].(string)
+	}
+
 	serviceProfile, _ := cmd.Payload["serviceProfile"].(string)
 	if serviceProfile == "" {
 		serviceProfile, _ = cmd.Payload["service_profile"].(string)
@@ -478,6 +483,7 @@ func (e *Executor) handleONUProvision(ctx context.Context, driver cli.CLIDriver,
 		OnuID:          onuID,
 		SerialNumber:   serial,
 		Description:    description,
+		ONUProfile:     onuProfile,
 		LineProfile:    lineProfile,
 		ServiceProfile: serviceProfile,
 		NativeVLAN:     vlan,
@@ -511,6 +517,7 @@ func (e *Executor) handleONUProvision(ctx context.Context, driver cli.CLIDriver,
 			"serial":         serial,
 			"ponPort":        ponPort,
 			"onuId":          onuID,
+			"onuProfile":     onuProfile,
 			"lineProfile":    lineProfile,
 			"serviceProfile": serviceProfile,
 		},
@@ -1749,6 +1756,7 @@ func (e *Executor) handleONUBulkProvisionSequential(ctx context.Context, driver 
 
 		lineProfile, _ := opMap["line_profile"].(string)
 		serviceProfile, _ := opMap["service_profile"].(string)
+		onuProfile, _ := opMap["onu_profile"].(string)
 		vlanFloat, _ := opMap["vlan"].(float64)
 		vlan := int(vlanFloat)
 
@@ -1757,6 +1765,7 @@ func (e *Executor) handleONUBulkProvisionSequential(ctx context.Context, driver 
 			PonPort:        ponPort,
 			OnuID:          onuID,
 			SerialNumber:   serial,
+			ONUProfile:     onuProfile,
 			LineProfile:    lineProfile,
 			ServiceProfile: serviceProfile,
 			NativeVLAN:     vlan,
@@ -1768,6 +1777,7 @@ func (e *Executor) handleONUBulkProvisionSequential(ctx context.Context, driver 
 			"serial":   serial,
 			"pon_port": ponPort,
 			"onu_id":   onuID,
+			"onu_profile": onuProfile,
 		}
 
 		if err != nil {

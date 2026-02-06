@@ -166,6 +166,7 @@ var (
 	onuProvBandwidthDn int
 	onuProvLineProfile string
 	onuProvSrvProfile  string
+	onuProvONUProfile  string
 	onuProvDescription string
 	onuProvDryRun      bool
 	onuProvForce       bool
@@ -655,6 +656,7 @@ func init() {
 	onuProvisionCmd.Flags().IntVar(&onuProvBandwidthUp, "bandwidth-up", 50, "Upload bandwidth in Mbps")
 	onuProvisionCmd.Flags().StringVar(&onuProvLineProfile, "line-profile", "", "Line profile name")
 	onuProvisionCmd.Flags().StringVar(&onuProvSrvProfile, "service-profile", "", "Service profile name")
+	onuProvisionCmd.Flags().StringVar(&onuProvONUProfile, "onu-profile", "", "ONU hardware profile name")
 	onuProvisionCmd.Flags().StringVar(&onuProvDescription, "description", "", "Subscriber description")
 	onuProvisionCmd.Flags().BoolVar(&onuProvDryRun, "dry-run", false, "Preview the operation without making changes")
 	onuProvisionCmd.Flags().BoolVar(&onuProvForce, "force", false, "Force direct VLAN config (unbind profile if mismatch)")
@@ -1803,14 +1805,14 @@ func runONUProvision(cmd *cobra.Command, args []string) error {
 	}
 
 	// Detect line profile usage for two-step provisioning (NAN-258)
-	usesLineProfile := onuProvLineProfile != "" && strings.Contains(onuProvLineProfile, "line")
+	usesLineProfile := onuProvLineProfile != ""
 
 	if usesLineProfile && !outputJSON {
 		fmt.Printf("Using line profile provisioning (two-step)\n\n")
 	}
 
 	printProvisionHeader(onuProvDryRun, onuProvSerial, onuProvVLAN, onuProvBandwidthDn, onuProvBandwidthUp,
-		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile)
+		onuProvPONPort, onuProvONUID, onuProvLineProfile, onuProvSrvProfile, onuProvONUProfile)
 
 	subscriber, tier := buildProvisionModels()
 
@@ -1854,6 +1856,9 @@ func buildProvisionModels() (*model.Subscriber, *model.ServiceTier) {
 	}
 	if onuProvSrvProfile != "" {
 		subscriber.Annotations["nano.io/service-profile"] = onuProvSrvProfile
+	}
+	if onuProvONUProfile != "" {
+		subscriber.Annotations["nano.io/onu-profile"] = onuProvONUProfile
 	}
 
 	tier := &model.ServiceTier{
@@ -1906,21 +1911,55 @@ func executeProvision(ctx context.Context, driver types.Driver, subscriber *mode
 		return result, nil
 	}
 
-	// Extract PON port and ONU ID from subscriber annotations
+	// Extract PON port and ONU ID from annotations or result metadata
 	ponPort := subscriber.Annotations["nano.io/pon-port"]
 	onuIDStr := subscriber.Annotations["nano.io/onu-id"]
-	if ponPort == "" || onuIDStr == "" {
-		// Can't verify without location info, skip
-		return result, nil
+	var onuID int
+	if onuIDStr != "" {
+		if parsed, parseErr := strconv.Atoi(onuIDStr); parseErr == nil {
+			onuID = parsed
+		}
 	}
-	onuID, err := strconv.Atoi(onuIDStr)
-	if err != nil {
-		return result, nil // Skip verification if ONU ID invalid
+	if ponPort == "" && result != nil && result.Metadata != nil {
+		if v, ok := result.Metadata["pon_port"].(string); ok {
+			ponPort = v
+		}
+	}
+	if onuID == 0 && result != nil && result.Metadata != nil {
+		if parsed, ok := parseMetadataInt(result.Metadata, "onu_id"); ok {
+			onuID = parsed
+		}
+	}
+	if ponPort == "" || onuID == 0 {
+		// Attempt serial lookup for auto-assigned ONU IDs
+		if subscriber.Spec.ONUSerial != "" {
+			if onu, lookupErr := lookupONUBySerial(ctx, driverV2, subscriber.Spec.ONUSerial); lookupErr == nil && onu != nil {
+				ponPort = onu.PONPort
+				onuID = onu.ONUID
+			}
+		}
+	}
+	if ponPort == "" || onuID == 0 {
+		// Can't verify without location info
+		return result, nil
 	}
 
 	// Verify ONU provisioning (NAN-258)
 	if err := verifyONUProvision(ctx, driverV2, ponPort, onuID); err != nil {
-		return nil, fmt.Errorf("provisioning verification failed: %w", err)
+		// Retry by resolving ONU ID via serial in case of auto-assign mismatch
+		if subscriber.Spec.ONUSerial != "" {
+			if onu, lookupErr := lookupONUBySerial(ctx, driverV2, subscriber.Spec.ONUSerial); lookupErr == nil && onu != nil {
+				ponPort = onu.PONPort
+				onuID = onu.ONUID
+				if retryErr := verifyONUProvision(ctx, driverV2, ponPort, onuID); retryErr != nil {
+					return nil, fmt.Errorf("provisioning verification failed: %w", retryErr)
+				}
+			} else {
+				return nil, fmt.Errorf("provisioning verification failed: %w", err)
+			}
+		} else {
+			return nil, fmt.Errorf("provisioning verification failed: %w", err)
+		}
 	}
 
 	// If using line profile, verify line profile association (NAN-258)
@@ -1935,8 +1974,15 @@ func executeProvision(ctx context.Context, driver types.Driver, subscriber *mode
 
 	// Verify VLAN if specified (NAN-258)
 	if subscriber.Spec.VLAN > 0 {
-		if err := verifyVLANUpdate(ctx, driverV2, ponPort, onuID, subscriber.Spec.VLAN); err != nil {
-			return nil, fmt.Errorf("VLAN verification failed: %w", err)
+		// Line profiles manage VLAN via service-port; SNMP verification can lag or be unsupported.
+		if usesLineProfile {
+			if !outputJSON {
+				fmt.Printf("Skipping VLAN verification (line profile manages VLAN)\n")
+			}
+		} else {
+			if err := verifyVLANUpdate(ctx, driverV2, ponPort, onuID, subscriber.Spec.VLAN); err != nil {
+				return nil, fmt.Errorf("VLAN verification failed: %w", err)
+			}
 		}
 	}
 

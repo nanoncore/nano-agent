@@ -375,7 +375,7 @@ func printONUSummary(onu *types.ONUInfo) {
 // =============================================================================
 
 // printProvisionHeader prints the provision command header
-func printProvisionHeader(dryRun bool, serial string, vlan, bwDown, bwUp int, ponPort string, onuID int, lineProfile, srvProfile string) {
+func printProvisionHeader(dryRun bool, serial string, vlan, bwDown, bwUp int, ponPort string, onuID int, lineProfile, srvProfile, onuProfile string) {
 	if outputJSON {
 		return
 	}
@@ -401,6 +401,9 @@ func printProvisionHeader(dryRun bool, serial string, vlan, bwDown, bwUp int, po
 	}
 	if srvProfile != "" {
 		fmt.Printf("Service Profile: %s\n", srvProfile)
+	}
+	if onuProfile != "" {
+		fmt.Printf("ONU Profile: %s\n", onuProfile)
 	}
 	fmt.Println()
 }
@@ -1015,7 +1018,7 @@ func verifyONUProvision(ctx context.Context, driverV2 types.DriverV2, ponPort st
 		return onu != nil && onu.IsOnline, nil
 	}
 
-	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
+	err := verifyONUChange(ctx, verifyFunc, 6, 2*time.Second)
 	if err != nil {
 		if !outputJSON {
 			fmt.Printf("FAILED\n")
@@ -1106,8 +1109,16 @@ func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, 
 		if err != nil {
 			return false, nil // Config fetch failed, retry
 		}
-		// Check if line profile is in the running config
-		return strings.Contains(config, fmt.Sprintf("profile line %s", lineProfile)), nil
+		// Check if line profile is bound to the expected ONU ID
+		if strings.Contains(config, fmt.Sprintf("onu %d profile line name %s", onuID, lineProfile)) {
+			return true, nil
+		}
+		// Fallback for partial configs
+		if strings.Contains(config, fmt.Sprintf("profile line name %s", lineProfile)) {
+			return true, nil
+		}
+		pattern := fmt.Sprintf(`profile line id \d+ name %s`, regexp.QuoteMeta(lineProfile))
+		return regexp.MustCompile(pattern).MatchString(config), nil
 	}
 
 	err := verifyONUChange(ctx, verifyFunc, 3, 2*time.Second)
@@ -1122,6 +1133,31 @@ func verifyLineProfileAssociation(ctx context.Context, driverV2 types.DriverV2, 
 		fmt.Printf("OK\n")
 	}
 	return nil
+}
+
+func parseMetadataInt(metadata map[string]any, key string) (int, bool) {
+	if metadata == nil {
+		return 0, false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case string:
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 // verifyONUDeletion verifies that an ONU was successfully deleted

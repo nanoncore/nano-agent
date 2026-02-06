@@ -119,9 +119,9 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		}
 	} else {
 		// Use explicit ONU ID with onu add command (requires profile)
-		profile := req.LineProfile
-		if profile == "" || profile == "default" {
-			return fmt.Errorf("line_profile is required when specifying explicit ONU ID: V-SOL OLT requires an actual profile name (e.g., 'AN5506-04-F1'), not 'default'. Configure the default profile in equipment metadata")
+		profile := req.ONUProfile
+		if profile == "" {
+			return fmt.Errorf("ONU profile is required when specifying an ONU ID")
 		}
 		cmd = fmt.Sprintf("onu add %d profile %s sn %s", req.OnuID, profile, req.SerialNumber)
 		output, err = d.Execute(ctx, cmd)
@@ -139,6 +139,14 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 		return fmt.Errorf("ONU add failed: %s", output)
 	}
 
+	// Bind line profile if provided (V-SOL two-tier profile system)
+	if req.LineProfile != "" {
+		cmd = fmt.Sprintf("onu %d profile line name %s", req.OnuID, req.LineProfile)
+		if _, err := d.Execute(ctx, cmd); err != nil {
+			return fmt.Errorf("failed to set line profile: %w", err)
+		}
+	}
+
 	// Configure description if provided
 	if req.Description != "" {
 		cmd = fmt.Sprintf("onu %d description %s", req.OnuID, req.Description)
@@ -150,7 +158,7 @@ func (d *VSOLCLIDriver) AddONU(ctx context.Context, req *cli.ONUProvisionRequest
 	// Configure native VLAN if specified
 	// V-SOL requires TCONT -> GEMPORT -> service-port for SNMP visibility
 	// This sequence populates the OIDONUServiceVLAN (.8.7.1.7) table
-	if req.NativeVLAN > 0 {
+	if req.NativeVLAN > 0 && req.LineProfile == "" {
 		// Create TCONT (traffic container)
 		cmd = fmt.Sprintf("onu %d tcont 1", req.OnuID)
 		if _, err := d.Execute(ctx, cmd); err != nil {
