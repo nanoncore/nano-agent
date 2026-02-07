@@ -1650,8 +1650,8 @@ func runONUList(cmd *cobra.Command, args []string) error {
 			fmt.Println("No ONUs found.")
 		} else {
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "Port\tID\tSerial\tStatus\tRx Power\tProfile\tVLAN")
-			fmt.Fprintln(w, "----\t--\t------\t------\t--------\t-------\t----")
+			fmt.Fprintln(w, "Port\tID\tSerial\tStatus\tRx Power\tONU Profile\tLine Profile\tVLAN")
+			fmt.Fprintln(w, "----\t--\t------\t------\t--------\t-----------\t------------\t----")
 			for _, onu := range onus {
 				status := onu.OperState
 				if onu.IsOnline {
@@ -1661,16 +1661,20 @@ func runONUList(cmd *cobra.Command, args []string) error {
 				if onu.RxPowerDBm != 0 {
 					rx = fmt.Sprintf("%.1f dBm", onu.RxPowerDBm)
 				}
-				profile := onu.LineProfile
-				if profile == "" {
-					profile = "-"
+				onuProfile := onu.ONUProfile
+				if onuProfile == "" {
+					onuProfile = "-"
+				}
+				lineProfile := onu.LineProfile
+				if lineProfile == "" {
+					lineProfile = "-"
 				}
 				vlan := "-"
 				if onu.VLAN > 0 {
 					vlan = fmt.Sprintf("%d", onu.VLAN)
 				}
-				fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
-					onu.PONPort, onu.ONUID, onu.Serial, status, rx, profile, vlan)
+				fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					onu.PONPort, onu.ONUID, onu.Serial, status, rx, onuProfile, lineProfile, vlan)
 			}
 			w.Flush()
 		}

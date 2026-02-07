@@ -43,6 +43,7 @@ func (a *ClientAdapter) PushONUs(oltID string, onus []ONUData) (*PushONUsRespons
 			// Vendor
 			Vendor: onu.Vendor,
 			// Profile and VLAN (from ONU list/detail)
+			ONUProfile:    onu.ONUProfile,
 			LineProfile:    onu.LineProfile,
 			ServiceProfile: onu.ServiceProfile,
 			VLAN:           onu.VLAN,

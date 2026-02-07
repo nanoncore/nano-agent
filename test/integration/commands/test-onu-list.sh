@@ -89,6 +89,13 @@ if [[ "$VENDOR" == "vsol" && "$PROTOCOL" == "snmp" ]]; then
         exit 1
     fi
     log_info "Found $LINE_PROFILE_COUNT ONUs with line_profile"
+
+    ONU_PROFILE_COUNT=$(echo "$OUTPUT" | jq '[.[] | select(.onu_profile != null and .onu_profile != "")] | length')
+    if [[ "$ONU_PROFILE_COUNT" -eq 0 ]]; then
+        log_error "Expected at least one ONU with onu_profile via SNMP"
+        exit 1
+    fi
+    log_info "Found $ONU_PROFILE_COUNT ONUs with onu_profile"
 fi
 
 # =============================================================================

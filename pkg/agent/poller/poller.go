@@ -488,6 +488,7 @@ func (p *Poller) pollOLT(ctx context.Context, state *OLTState) *PollResult {
 			InputRateBps:   onu.InputRateBps,
 			OutputRateBps:  onu.OutputRateBps,
 			Vendor:         onu.Vendor,
+			ONUProfile:     onu.ONUProfile,
 			LineProfile:    onu.LineProfile,
 			ServiceProfile: onu.ServiceProfile,
 			VLAN:           onu.VLAN,
