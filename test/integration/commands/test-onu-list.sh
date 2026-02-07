@@ -81,6 +81,23 @@ fi
 
 log_info "Test 1 passed: JSON output is valid"
 
+# If V-SOL SNMP is used, ensure at least one ONU reports line_profile
+if [[ "$VENDOR" == "vsol" && "$PROTOCOL" == "snmp" ]]; then
+    LINE_PROFILE_COUNT=$(echo "$OUTPUT" | jq '[.[] | select(.line_profile != null and .line_profile != "")] | length')
+    if [[ "$LINE_PROFILE_COUNT" -eq 0 ]]; then
+        log_error "Expected at least one ONU with line_profile via SNMP"
+        exit 1
+    fi
+    log_info "Found $LINE_PROFILE_COUNT ONUs with line_profile"
+
+    ONU_PROFILE_COUNT=$(echo "$OUTPUT" | jq '[.[] | select(.onu_profile != null and .onu_profile != "")] | length')
+    if [[ "$ONU_PROFILE_COUNT" -eq 0 ]]; then
+        log_error "Expected at least one ONU with onu_profile via SNMP"
+        exit 1
+    fi
+    log_info "Found $ONU_PROFILE_COUNT ONUs with onu_profile"
+fi
+
 # =============================================================================
 # Test 2: Table output format
 # =============================================================================

@@ -88,6 +88,71 @@ func TestValidateSerialNumber(t *testing.T) {
 	}
 }
 
+func TestParseMetadataInt(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata map[string]any
+		key      string
+		want     int
+		wantOK   bool
+	}{
+		{
+			name:     "int",
+			metadata: map[string]any{"onu_id": 7},
+			key:      "onu_id",
+			want:     7,
+			wantOK:   true,
+		},
+		{
+			name:     "int64",
+			metadata: map[string]any{"onu_id": int64(9)},
+			key:      "onu_id",
+			want:     9,
+			wantOK:   true,
+		},
+		{
+			name:     "float64",
+			metadata: map[string]any{"onu_id": float64(11)},
+			key:      "onu_id",
+			want:     11,
+			wantOK:   true,
+		},
+		{
+			name:     "string",
+			metadata: map[string]any{"onu_id": "13"},
+			key:      "onu_id",
+			want:     13,
+			wantOK:   true,
+		},
+		{
+			name:     "missing",
+			metadata: map[string]any{"other": 1},
+			key:      "onu_id",
+			want:     0,
+			wantOK:   false,
+		},
+		{
+			name:     "invalid string",
+			metadata: map[string]any{"onu_id": "not-an-int"},
+			key:      "onu_id",
+			want:     0,
+			wantOK:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseMetadataInt(tt.metadata, tt.key)
+			if ok != tt.wantOK {
+				t.Fatalf("expected ok=%v, got %v", tt.wantOK, ok)
+			}
+			if got != tt.want {
+				t.Fatalf("expected %d, got %d", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestValidateONUIdentifier(t *testing.T) {
 	tests := []struct {
 		name    string

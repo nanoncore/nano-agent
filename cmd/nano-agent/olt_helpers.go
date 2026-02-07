@@ -330,6 +330,7 @@ func printBasicPower(onu *types.ONUInfo) {
 func printServiceConfig(onu *types.ONUInfo) {
 	fmt.Printf("Service Configuration\n")
 	fmt.Printf("---------------------\n")
+	printConfigField("ONU Profile", onu.ONUProfile)
 	printConfigField("Line Profile", onu.LineProfile)
 	printConfigField("Service Profile", onu.ServiceProfile)
 	if onu.VLAN > 0 {
@@ -687,6 +688,9 @@ func printCurrentConfig(onu *types.ONUInfo) {
 	fmt.Printf("  Status:          %s\n", onu.OperState)
 	if onu.VLAN > 0 {
 		fmt.Printf("  VLAN:            %d\n", onu.VLAN)
+	}
+	if onu.ONUProfile != "" {
+		fmt.Printf("  ONU Profile:     %s\n", onu.ONUProfile)
 	}
 	if onu.LineProfile != "" {
 		fmt.Printf("  Line Profile:    %s\n", onu.LineProfile)
