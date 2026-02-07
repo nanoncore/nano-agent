@@ -819,6 +819,7 @@ type ONUData struct {
 	Vendor string `json:"vendor,omitempty"`
 
 	// Profile and VLAN (from ONU list/detail)
+	// Note: poller payloads follow backend API camelCase JSON.
 	ONUProfile    string `json:"onuProfile,omitempty"`
 	LineProfile    string `json:"lineProfile,omitempty"`
 	ServiceProfile string `json:"serviceProfile,omitempty"`
