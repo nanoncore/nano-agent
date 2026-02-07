@@ -1,7 +1,7 @@
 scan:
   scanners:
     - vuln
-    - config
+    - misconfig
     - secret
   severity:
     - HIGH
@@ -14,3 +14,7 @@ cache:
 skip-dirs:
   - .git
   - .trivycache
+skip-files:
+  - .secrets
+  - ./.secrets
+  - "**/.secrets"

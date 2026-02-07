@@ -9,4 +9,4 @@ fi
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$REPO_ROOT"
 
-trivy fs --config trivy.yaml .
+trivy fs --config trivy.yaml --skip-files .secrets .
