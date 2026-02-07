@@ -1,0 +1,20 @@
+scan:
+  scanners:
+    - vuln
+    - misconfig
+    - secret
+  severity:
+    - HIGH
+    - CRITICAL
+  exit-code: 1
+
+cache:
+  dir: .trivycache
+
+skip-dirs:
+  - .git
+  - .trivycache
+skip-files:
+  - .secrets
+  - ./.secrets
+  - "**/.secrets"

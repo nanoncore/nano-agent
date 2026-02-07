@@ -2,3 +2,4 @@ AGENT_CONFIG_SYNC_GAP_ANALYSIS.md
 /nano-agent
 bin/
 .secrets
+.trivycache/
