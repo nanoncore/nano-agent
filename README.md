@@ -114,6 +114,14 @@ Configuration is stored in `/etc/nano-agent/` after enrollment:
 - https://docs.nanoncore.com/docs/edge-deployment
 - https://docs.nanoncore.com/docs/architecture
 
+## Security Scanning (Local)
+
+Run the same Trivy scan used in CI:
+
+```bash
+./scripts/trivy.sh
+```
+
 ## Support
 
 - Documentation: https://docs.nanoncore.com
